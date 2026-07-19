@@ -1,0 +1,63 @@
+name: Deploy crypto service
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crypto/unifold-demo/server/**"
+      - ".github/workflows/deploy-crypto.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-crypto
+  cancel-in-progress: true
+
+env:
+  AZURE_WEBAPP_NAME: ht6-tomoyard-crypto
+  CRYPTO_SERVER_DIR: crypto/unifold-demo/server
+  NODE_VERSION: "22.x"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: crypto/unifold-demo/server/package-lock.json
+
+      - name: Install, test, and build
+        working-directory: ${{ env.CRYPTO_SERVER_DIR }}
+        run: |
+          npm ci
+          npm test
+          npm run typecheck
+          npm run build
+
+      # Deploy the compiled server and its production dependencies. This keeps
+      # startup independent from Oryx and from TypeScript-only dev dependencies.
+      - name: Package production service
+        working-directory: ${{ env.CRYPTO_SERVER_DIR }}
+        run: |
+          npm prune --omit=dev
+          zip -qr "$GITHUB_WORKSPACE/crypto-server.zip" dist node_modules package.json package-lock.json
+
+      - name: Deploy to Azure App Service
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_CRYPTO_WEBAPP_PUBLISH_PROFILE }}
+          package: crypto-server.zip
+
+      - name: Verify datastore readiness
+        run: >-
+          curl --fail --silent --show-error
+          --retry 30 --retry-delay 10 --retry-max-time 300 --retry-all-errors
+          "https://${AZURE_WEBAPP_NAME}.azurewebsites.net/ready"

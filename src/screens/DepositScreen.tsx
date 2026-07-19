@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DoodleButton, DoodleCard } from '../components/Doodle';
@@ -6,9 +7,10 @@ import OutlinedText from '../components/OutlinedText';
 import YardBackground from '../components/YardBackground';
 import TopBar from '../components/TopBar';
 import { fmtUsd } from '../money';
+import { ApiError } from '../api';
 import { useSession } from '../state/session';
 import { C, F } from '../theme';
-import { Wallet } from '../types';
+import { Wallet, WithdrawalDestination } from '../types';
 
 const QUOTAS = [2, 4, 6, 8];
 // USDC on Base (matches the treasury's source chain).
@@ -18,8 +20,41 @@ const BASE_USDC = {
   token_address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
 };
 
+type WithdrawalIntent = {
+  version: 1;
+  key: string;
+  amountUnits: string;
+  destination: WithdrawalDestination;
+  createdAt: string;
+  state: 'sending' | 'reconciling';
+};
+
+const WITHDRAWAL_INTENT_PREFIX = '@tomoyard:withdrawal-intent:v1:';
+
+function newWithdrawalKey(): string {
+  const random = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+  return `withdraw-${Date.now().toString(36)}-${random}`.slice(0, 128);
+}
+
+function isWithdrawalIntent(value: unknown): value is WithdrawalIntent {
+  const intent = value as Partial<WithdrawalIntent> | null;
+  return !!intent &&
+    intent.version === 1 &&
+    typeof intent.key === 'string' &&
+    /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(intent.key) &&
+    typeof intent.amountUnits === 'string' &&
+    /^[1-9]\d*$/.test(intent.amountUnits) &&
+    !!intent.destination &&
+    typeof intent.destination.chain_type === 'string' &&
+    typeof intent.destination.chain_id === 'string' &&
+    typeof intent.destination.token_address === 'string' &&
+    typeof intent.destination.recipient_address === 'string' &&
+    typeof intent.createdAt === 'string' &&
+    (intent.state === 'sending' || intent.state === 'reconciling');
+}
+
 export default function DepositScreen() {
-  const { api } = useSession();
+  const { api, me } = useSession();
   const insets = useSafeAreaInsets();
   const [quota, setQuota] = useState(4);
   const [thisMonth, setThisMonth] = useState<number | null>(null);
@@ -30,9 +65,35 @@ export default function DepositScreen() {
   const [cashOutAddr, setCashOutAddr] = useState('');
   const [walletBusy, setWalletBusy] = useState(false);
   const [walletMsg, setWalletMsg] = useState<string | null>(null);
+  const [withdrawalIntent, setWithdrawalIntent] = useState<WithdrawalIntent | null>(null);
+  const withdrawalStorageKey = me ? `${WITHDRAWAL_INTENT_PREFIX}${me.username}` : null;
 
   const loadWallet = () => api.wallet().then(setWallet).catch(() => {});
   useEffect(() => { loadWallet(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    let active = true;
+    setWithdrawalIntent(null);
+    setCashOutAddr('');
+    if (!withdrawalStorageKey) return () => { active = false; };
+    AsyncStorage.getItem(withdrawalStorageKey).then((raw) => {
+      if (!active || !raw) return;
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        if (!isWithdrawalIntent(parsed)) {
+          AsyncStorage.removeItem(withdrawalStorageKey).catch(() => {});
+          return;
+        }
+        const intent = { ...parsed, state: 'reconciling' as const };
+        setWithdrawalIntent(intent);
+        setCashOutAddr(intent.destination.recipient_address);
+        setWalletMsg('A previous cash-out still needs reconciliation. Retry it with the saved request.');
+      } catch {
+        AsyncStorage.removeItem(withdrawalStorageKey).catch(() => {});
+      }
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [withdrawalStorageKey]);
 
   const addFunds = async () => {
     setWalletBusy(true); setWalletMsg(null);
@@ -59,16 +120,63 @@ export default function DepositScreen() {
   };
 
   const cashOut = async () => {
-    if (!cashOutAddr.trim()) { setWalletMsg('Enter a wallet address'); return; }
+    if (!withdrawalStorageKey) { setWalletMsg('Sign in before cashing out'); return; }
+    if (!withdrawalIntent && !cashOutAddr.trim()) { setWalletMsg('Enter a wallet address'); return; }
     setWalletBusy(true); setWalletMsg(null);
+    let intent = withdrawalIntent;
     try {
-      await api.withdraw(String(wallet?.balanceUnits ?? '0'), {
-        ...BASE_USDC, recipient_address: cashOutAddr.trim(),
-      });
+      if (!intent) {
+        const amountUnits = String(wallet?.balanceUnits ?? '0');
+        if (!/^[1-9]\d*$/.test(amountUnits)) throw new Error('There is no balance to cash out');
+        intent = {
+          version: 1,
+          key: newWithdrawalKey(),
+          amountUnits,
+          destination: { ...BASE_USDC, recipient_address: cashOutAddr.trim() },
+          createdAt: new Date().toISOString(),
+          state: 'sending',
+        };
+        // Persist the exact operation before the first network request. If the
+        // response is lost, every retry uses this key and payload byte-for-byte.
+        await AsyncStorage.setItem(withdrawalStorageKey, JSON.stringify(intent));
+        setWithdrawalIntent(intent);
+      }
+      const result = await api.withdraw(intent.amountUnits, intent.destination, intent.key);
+      if (result.pending || !result.ok) {
+        const pendingIntent = { ...intent, state: 'reconciling' as const };
+        // The original durable record already has the exact key and payload;
+        // updating its presentation state is best-effort.
+        await AsyncStorage.setItem(withdrawalStorageKey, JSON.stringify(pendingIntent)).catch(() => {});
+        setWithdrawalIntent(pendingIntent);
+        setWalletMsg('Cash-out is being reconciled. Retry this saved request in a moment.');
+        return;
+      }
+      const cleared = await AsyncStorage.removeItem(withdrawalStorageKey)
+        .then(() => true)
+        .catch(() => false);
       await loadWallet();
-      setWalletMsg('Cash-out sent! It arrives on Base shortly.');
+      if (cleared) {
+        setWithdrawalIntent(null);
+        setWalletMsg('Cash-out sent! It arrives on Base shortly.');
+      } else {
+        const completedIntent = { ...intent, state: 'reconciling' as const };
+        setWithdrawalIntent(completedIntent);
+        setWalletMsg('Cash-out succeeded. The saved request could not be cleared yet; retrying it is safe.');
+      }
     } catch (e) {
-      setWalletMsg(e instanceof Error ? e.message : 'Cash-out failed');
+      const ambiguous = e instanceof ApiError && (e.status === 0 || e.status >= 500 || e.status === 409);
+      if (intent && ambiguous) {
+        const pendingIntent = { ...intent, state: 'reconciling' as const };
+        await AsyncStorage.setItem(withdrawalStorageKey, JSON.stringify(pendingIntent)).catch(() => {});
+        setWithdrawalIntent(pendingIntent);
+        setWalletMsg('The result is not final yet. Retry this saved cash-out to reconcile it safely.');
+      } else {
+        if (intent) {
+          await AsyncStorage.removeItem(withdrawalStorageKey).catch(() => {});
+          setWithdrawalIntent(null);
+        }
+        setWalletMsg(e instanceof Error ? e.message : 'Cash-out failed');
+      }
     } finally { setWalletBusy(false); }
   };
 
@@ -120,6 +228,7 @@ export default function DepositScreen() {
               <TextInput
                 value={cashOutAddr}
                 onChangeText={setCashOutAddr}
+                editable={!withdrawalIntent}
                 autoCapitalize="none"
                 placeholder="0x… (USDC on Base)"
                 placeholderTextColor={C.fadedInk}
@@ -130,12 +239,21 @@ export default function DepositScreen() {
               />
               <View style={{ marginTop: 8 }}>
                 <DoodleButton
-                  label={walletBusy ? 'Working' : `Cash out ${fmtUsd(wallet.balanceUnits)}`}
-                  seed={5} disabled={walletBusy || !wallet.readyToCashOut}
+                  label={walletBusy
+                    ? 'Working'
+                    : withdrawalIntent
+                      ? `Reconcile ${fmtUsd(withdrawalIntent.amountUnits)} cash-out`
+                      : `Cash out ${fmtUsd(wallet.balanceUnits)}`}
+                  seed={5} disabled={walletBusy || (!withdrawalIntent && !wallet.readyToCashOut)}
                   onPress={cashOut}
                 />
               </View>
-              {!wallet.readyToCashOut && (
+              {withdrawalIntent && (
+                <Text style={{ fontFamily: F.body, fontSize: 11.5, color: C.labelOrange, marginTop: 4 }}>
+                  This saved request keeps the same safety key and amount until its outcome is final.
+                </Text>
+              )}
+              {!withdrawalIntent && !wallet.readyToCashOut && (
                 <Text style={{ fontFamily: F.body, fontSize: 11.5, color: C.fadedInk, marginTop: 4 }}>
                   Cash out unlocks at {fmtUsd(wallet.cashoutThresholdUnits)} (batches the on-chain fee).
                 </Text>

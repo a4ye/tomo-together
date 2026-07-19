@@ -1,8 +1,10 @@
 name: Build APK
 
-# Builds on the ht6-builder Azure VM (8 cores, persistent gradle daemon +
+# Builds on the ht6-builder Azure VM (32 cores, persistent gradle daemon +
 # caches) instead of the 2-core hosted runner: warm builds in a few minutes.
-# The hosted job only triggers the remote build and streams its logs.
+# The hosted job uploads the current versioned build script, triggers it, and
+# streams its logs. This also updates already-provisioned builders whose
+# cloud-init custom_data is immutable.
 on:
   push:
     branches: [main]
@@ -12,14 +14,17 @@ on:
       - "plugins/**"
       - "App.tsx"
       - "index.ts"
+      - "app.config.ts"
       - "app.json"
       - "package.json"
       - "package-lock.json"
+      - "infra/build-apk-remote.sh"
       - ".github/workflows/build-apk.yml"
   workflow_dispatch:
 
 concurrency:
-  group: build-apk-${{ github.ref }}
+  # Every ref shares one persistent builder checkout and output location.
+  group: build-apk
   # queue builds instead of cancelling: each run publishes version.json, and a
   # cancelled run never gets that far. Under active development the previous
   # cancel-in-progress: true meant no build ever finished.
@@ -28,7 +33,24 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # Auth0 client configuration is intentionally stored as Actions variables:
+      # Expo inlines EXPO_PUBLIC_* values into the client bundle.
+      EXPO_PUBLIC_AUTH0_DOMAIN: ${{ vars.EXPO_PUBLIC_AUTH0_DOMAIN }}
+      EXPO_PUBLIC_AUTH0_CLIENT_ID: ${{ vars.EXPO_PUBLIC_AUTH0_CLIENT_ID }}
+      EXPO_PUBLIC_AUTH0_WEB_CLIENT_ID: ${{ vars.EXPO_PUBLIC_AUTH0_WEB_CLIENT_ID }}
+      EXPO_PUBLIC_AUTH0_AUDIENCE: ${{ vars.EXPO_PUBLIC_AUTH0_AUDIENCE }}
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate public Auth0 build configuration
+        shell: bash
+        run: |
+          : "${EXPO_PUBLIC_AUTH0_DOMAIN:?Set the EXPO_PUBLIC_AUTH0_DOMAIN Actions variable}"
+          : "${EXPO_PUBLIC_AUTH0_CLIENT_ID:?Set the EXPO_PUBLIC_AUTH0_CLIENT_ID Actions variable}"
+          : "${EXPO_PUBLIC_AUTH0_WEB_CLIENT_ID:?Set the EXPO_PUBLIC_AUTH0_WEB_CLIENT_ID Actions variable}"
+          : "${EXPO_PUBLIC_AUTH0_AUDIENCE:?Set the EXPO_PUBLIC_AUTH0_AUDIENCE Actions variable}"
+
       - name: Azure login (scoped to the builder VM)
         uses: azure/login@v2
         with:
@@ -53,6 +75,15 @@ jobs:
           done
           echo "builder never became ready" >&2; exit 1
 
+      - name: Install current build script on builder
+        run: |
+          scp -i builder_key -o StrictHostKeyChecking=accept-new \
+            infra/build-apk-remote.sh \
+            azureuser@${{ secrets.BUILDER_HOST }}:/opt/build/build-ci.sh
+          ssh -i builder_key -o StrictHostKeyChecking=accept-new \
+            azureuser@${{ secrets.BUILDER_HOST }} \
+            'chmod 700 /opt/build/build-ci.sh'
+
       - name: Build on Azure VM
         env:
           KUDU_USER: ${{ secrets.KUDU_USER }}
@@ -61,13 +92,16 @@ jobs:
           KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          # %q shell-quotes every value: KUDU_USER literally starts with '$'
-          # and would otherwise be expanded away when the VM sources this.
-          printf 'SHA=%q\nGH_TOKEN=%q\nKUDU_USER=%q\nKUDU_PASS=%q\nKEYSTORE_B64=%q\nKEYSTORE_PASS=%q\n' \
+          set -euo pipefail
+          # NUL-delimited stdin preserves values literally. The remote command
+          # is static, so credentials are neither logged nor evaluated as code.
+          printf '%s\0' \
             "$GITHUB_SHA" "$GH_TOKEN" "$KUDU_USER" "$KUDU_PASS" "$KEYSTORE_B64" "$KEYSTORE_PASS" \
+            "$EXPO_PUBLIC_AUTH0_DOMAIN" "$EXPO_PUBLIC_AUTH0_CLIENT_ID" \
+            "$EXPO_PUBLIC_AUTH0_WEB_CLIENT_ID" "$EXPO_PUBLIC_AUTH0_AUDIENCE" \
             | ssh -i builder_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 \
                 azureuser@${{ secrets.BUILDER_HOST }} \
-                'set -a && . /dev/stdin && exec /opt/build/build.sh'
+                '/opt/build/build-ci.sh'
 
       - name: Fetch APK for artifact
         run: scp -i builder_key -o StrictHostKeyChecking=accept-new azureuser@${{ secrets.BUILDER_HOST }}:/opt/build/last.apk tomo-yard.apk

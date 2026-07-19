@@ -1,9 +1,10 @@
-version: "3"
 services:
   server:
     build: .
     ports:
       - "8787:8787"
     env_file: .env
-    volumes:
-      - ./data:/app/data
+    environment:
+      NODE_ENV: production
+      CRYPTO_STORE_BACKEND: mongodb
+    restart: unless-stopped

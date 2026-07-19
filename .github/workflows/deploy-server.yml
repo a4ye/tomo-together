@@ -18,6 +18,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install and test server
+        working-directory: server
+        run: |
+          npm ci
+          npm test
+
       # Ship only the app itself; local dev data and node_modules stay out.
       # Oryx installs dependencies on the App Service (SCM_DO_BUILD_DURING_DEPLOYMENT).
       - name: Package server

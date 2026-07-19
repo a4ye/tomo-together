@@ -5,6 +5,15 @@ const multer = require('multer');
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
+const {
+  AuthConfigurationError,
+  bindAuth0Subject,
+  classifyBearerToken,
+  createAuth0JwtMiddleware,
+  getBearerToken,
+  isLegacyAuthEnabled,
+  isLegacyTokenAllowed,
+} = require('./auth0');
 
 const PORT = process.env.PORT || 4000;
 // DATA_DIR is overridable so hosted deploys can keep state outside the app dir
@@ -27,6 +36,7 @@ CREATE TABLE IF NOT EXISTS users (
   pass_hash TEXT NOT NULL,
   salt TEXT NOT NULL,
   token TEXT UNIQUE NOT NULL,
+  auth0_sub TEXT,
   acorns INTEGER NOT NULL DEFAULT 50,
   color TEXT NOT NULL DEFAULT '#A8D8C8',
   owned TEXT NOT NULL DEFAULT '[]',     -- JSON array of item ids
@@ -90,6 +100,15 @@ try {
 } catch {
   // column already exists
 }
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN auth0_sub TEXT`);
+} catch {
+  // column already exists
+}
+// Auth0 identities are linked exclusively by the provider's stable `sub`.
+// Legacy rows intentionally remain null and therefore do not participate.
+db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS users_auth0_sub_unique
+  ON users(auth0_sub) WHERE auth0_sub IS NOT NULL`);
 
 // --- crypto staking columns/tables (safe on existing DBs) ---
 for (const stmt of [
@@ -116,6 +135,39 @@ CREATE TABLE IF NOT EXISTS hangout_settlements (
 `);
 
 const cryptoApi = require('./crypto');
+
+function asyncRoute(handler) {
+  return (req, res, next) => {
+    Promise.resolve(handler(req, res, next)).catch(next);
+  };
+}
+
+function sendCryptoError(res, error) {
+  if (error instanceof cryptoApi.CryptoUnavailableError) {
+    return res.status(503).json({ error: error.code, message: error.message });
+  }
+  if (error instanceof cryptoApi.CryptoError) {
+    const status = [400, 403, 404, 409].includes(error.status) ? error.status :
+      error.status === 503 ? 503 : 502;
+    return res.status(status).json({
+      error: status === 502 ? 'crypto_upstream_failed' : error.code,
+      message: status === 502 ? 'Crypto service request failed. Please try again.' : error.message,
+    });
+  }
+  console.error('[crypto] unexpected proxy failure', {
+    name: error && error.name,
+    status: error && error.status,
+  });
+  return res.status(502).json({
+    error: 'crypto_upstream_failed',
+    message: 'Crypto service request failed. Please try again.',
+  });
+}
+
+function cryptoEventRsvp(event, username) {
+  if (!event || !Array.isArray(event.rsvps)) return null;
+  return event.rsvps.find((rsvp) => rsvp && rsvp.userId === cryptoApi.extId(username)) || null;
+}
 
 const ACTIVITIES = [
   { id: 'ramen', label: 'Ramen' },
@@ -229,6 +281,14 @@ const newToken = () => crypto.randomBytes(24).toString('hex');
 const pair = (x, y) => (x < y ? [x, y] : [y, x]);
 const level = (vibe) => Math.floor(vibe / VIBE_PER_LEVEL) + 1;
 
+let auth0JwtMiddleware = null;
+let auth0ConfigurationError = null;
+try {
+  auth0JwtMiddleware = createAuth0JwtMiddleware();
+} catch (error) {
+  auth0ConfigurationError = error;
+}
+
 function publicUser(u) {
   return {
     username: u.username,
@@ -239,12 +299,61 @@ function publicUser(u) {
   };
 }
 
-function auth(req, res, next) {
-  const t = (req.headers.authorization || '').replace('Bearer ', '');
-  const u = db.prepare('SELECT * FROM users WHERE token = ?').get(t);
-  if (!u) return res.status(401).json({ error: 'Not signed in' });
-  req.user = u;
+function notSignedIn(res) {
+  res.setHeader('WWW-Authenticate', 'Bearer');
+  return res.status(401).json({ error: 'Not signed in' });
+}
+
+function requireLegacyAuthEnabled(_req, res, next) {
+  if (!isLegacyAuthEnabled()) {
+    return res.status(403).json({ error: 'Legacy authentication is disabled' });
+  }
   next();
+}
+
+// JWT-only identity validation for profile discovery/onboarding. This path is
+// deliberately separate from legacy auth: even a malformed JWT is verified as
+// a JWT and can never fall back to a database token lookup.
+function auth0Identity(req, res, next) {
+  const token = getBearerToken(req);
+  if (classifyBearerToken(token) !== 'jwt') return notSignedIn(res);
+  if (auth0ConfigurationError) return next(auth0ConfigurationError);
+  if (!auth0JwtMiddleware) {
+    return next(new AuthConfigurationError('Auth0 JWT verification is unavailable'));
+  }
+  auth0JwtMiddleware(req, res, (error) => {
+    if (error) return next(error);
+    bindAuth0Subject(req, res, next);
+  });
+}
+
+function requireAuth0Profile(req, res, next) {
+  const user = db.prepare('SELECT * FROM users WHERE auth0_sub = ?').get(req.auth0Sub);
+  if (!user) return res.status(409).json({ error: 'PROFILE_REQUIRED' });
+  req.user = user;
+  next();
+}
+
+function auth(req, res, next) {
+  const token = getBearerToken(req);
+  const kind = classifyBearerToken(token);
+
+  if (kind === 'legacy') {
+    if (!isLegacyTokenAllowed(token)) return notSignedIn(res);
+    const user = db.prepare('SELECT * FROM users WHERE token = ? AND auth0_sub IS NULL').get(token);
+    if (!user) return notSignedIn(res);
+    req.user = user;
+    return next();
+  }
+
+  if (kind === 'jwt') {
+    return auth0Identity(req, res, (error) => {
+      if (error) return next(error);
+      requireAuth0Profile(req, res, next);
+    });
+  }
+
+  return notSignedIn(res);
 }
 
 function bonusFor(dateISO, memberIds) {
@@ -383,7 +492,102 @@ function maybeComplete(hangoutId) {
 }
 
 // ---------- auth ----------
-app.post('/auth/register', (req, res) => {
+function isValidBirthday(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() === month - 1 &&
+    parsed.getUTCDate() === day;
+}
+
+app.get('/auth/profile', auth0Identity, (req, res) => {
+  const user = db.prepare('SELECT * FROM users WHERE auth0_sub = ?').get(req.auth0Sub);
+  res.json({ me: user ? meView(user) : null });
+});
+
+const provisionAuth0Profile = db.transaction((profile) => {
+  const existing = db.prepare('SELECT * FROM users WHERE auth0_sub = ?').get(profile.auth0Sub);
+  if (existing) return { created: false, user: existing };
+  if (db.prepare('SELECT id FROM users WHERE username = ?').get(profile.username)) {
+    return { conflict: true };
+  }
+
+  // These values satisfy the old NOT NULL schema without creating a second
+  // credential. Their prefixes cannot be classified as a legacy bearer token,
+  // and legacy password login explicitly excludes Auth0-linked rows.
+  const disabledPasswordHash = `auth0-disabled:${crypto.randomBytes(32).toString('hex')}`;
+  const disabledSalt = `auth0-disabled:${crypto.randomBytes(16).toString('hex')}`;
+  const disabledToken = `auth0-disabled:${crypto.randomBytes(32).toString('hex')}`;
+  db.prepare(`INSERT INTO users
+    (username, name, birthday, pass_hash, salt, token, auth0_sub, color, species, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    profile.username,
+    profile.name,
+    profile.birthday,
+    disabledPasswordHash,
+    disabledSalt,
+    disabledToken,
+    profile.auth0Sub,
+    profile.color,
+    profile.species,
+    now(),
+  );
+  return {
+    created: true,
+    user: db.prepare('SELECT * FROM users WHERE auth0_sub = ?').get(profile.auth0Sub),
+  };
+});
+
+app.put('/auth/profile', auth0Identity, (req, res, next) => {
+  // Retried onboarding requests return the already-linked row unchanged. In
+  // particular, request claims or a later username cannot relink an identity.
+  const existing = db.prepare('SELECT * FROM users WHERE auth0_sub = ?').get(req.auth0Sub);
+  if (existing) return res.status(200).json({ me: meView(existing) });
+
+  const { username, name, birthday, color, species } = req.body || {};
+  if (!/^[a-z0-9_]{3,20}$/.test(username || '')) {
+    return res.status(400).json({ error: 'Username must be 3-20 chars: a-z, 0-9, _' });
+  }
+  if (typeof name !== 'string' || name.length < 1 || name.length > 40 ||
+      name.trim() !== name || /[\u0000-\u001f\u007f]/.test(name)) {
+    return res.status(400).json({ error: 'Name is required and must be at most 40 characters' });
+  }
+  if (!isValidBirthday(birthday)) {
+    return res.status(400).json({ error: 'Birthday must be a valid date' });
+  }
+  if (typeof color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(color)) {
+    return res.status(400).json({ error: 'Color must be a six-digit hex color' });
+  }
+  if (!SPECIES.includes(species)) {
+    return res.status(400).json({ error: 'Species is not supported' });
+  }
+  let result;
+  try {
+    // IMMEDIATE serializes provisioning across server processes before either
+    // the subject or username uniqueness checks are made.
+    result = provisionAuth0Profile.immediate({
+      auth0Sub: req.auth0Sub,
+      username,
+      name,
+      birthday,
+      color,
+      species,
+    });
+  } catch (error) {
+    if (error && String(error.code || '').startsWith('SQLITE_CONSTRAINT')) {
+      return res.status(409).json({ error: 'Username is taken' });
+    }
+    return next(error);
+  }
+  if (result.conflict) return res.status(409).json({ error: 'Username is taken' });
+  if (!result.created) return res.status(200).json({ me: meView(result.user) });
+
+  cryptoApi.ensureUser(result.user.username).catch(() => {}); // best-effort wallet registration
+  return res.status(201).json({ me: meView(result.user) });
+});
+
+app.post('/auth/register', requireLegacyAuthEnabled, (req, res) => {
   const { username, name, birthday, password, color, species } = req.body || {};
   if (!/^[a-z0-9_]{3,20}$/.test(username || ''))
     return res.status(400).json({ error: 'Username must be 3-20 chars: a-z, 0-9, _' });
@@ -402,16 +606,16 @@ app.post('/auth/register', (req, res) => {
     .run(username, name, birthday, hash(password, salt), salt, token, color || '#A8D8C8',
       SPECIES.includes(species) ? species : 'cat', now());
   const u = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
-  cryptoApi.ensureUser(username).catch(() => {}); // best-effort wallet + monthly grant
+  cryptoApi.ensureUser(username).catch(() => {}); // best-effort wallet registration
   res.json({ token, me: meView(u) });
 });
 
-app.post('/auth/login', (req, res) => {
+app.post('/auth/login', requireLegacyAuthEnabled, (req, res) => {
   const { username, password } = req.body || {};
   const u = db.prepare('SELECT * FROM users WHERE username = ?').get(username || '');
-  if (!u || hash(password || '', u.salt) !== u.pass_hash)
+  if (!u || u.auth0_sub || hash(password || '', u.salt) !== u.pass_hash)
     return res.status(401).json({ error: 'Wrong username or password' });
-  cryptoApi.ensureUser(u.username).catch(() => {}); // top up monthly grant on sign-in
+  cryptoApi.ensureUser(u.username).catch(() => {}); // best-effort wallet registration
   res.json({ token: u.token, me: meView(u) });
 });
 
@@ -658,7 +862,7 @@ app.get('/suggestions', auth, (req, res) => {
 });
 
 // ---------- hangouts ----------
-app.post('/hangouts', auth, async (req, res) => {
+app.post('/hangouts', auth, asyncRoute(async (req, res) => {
   const { activity, date, place, friendUsernames, stakeUnits } = req.body || {};
   const act = ACTIVITIES.find((a) => a.id === activity);
   if (!act) return res.status(400).json({ error: 'Pick an activity' });
@@ -677,88 +881,225 @@ app.post('/hangouts', auth, async (req, res) => {
   const ids = [req.user.id, ...others.map((u) => u.id)];
   const bonus = bonusFor(date, ids);
 
-  // Optional crypto stake: create the event and stake the host up front, so a
-  // failure (e.g. insufficient balance) aborts before any local hangout exists.
+  // A requested stake is never silently downgraded. Create the remote event,
+  // but let the host use the same explicit, retryable Stake action as everyone
+  // else. That avoids debiting real money before the local hangout is durable.
   let cryptoEventId = null;
   let stake = null;
-  const wantStake = cryptoApi.enabled() && typeof stakeUnits === 'string' && /^[1-9]\d*$/.test(stakeUnits);
+  const wantStake = stakeUnits !== undefined;
   if (wantStake) {
+    if (typeof stakeUnits !== 'string' || !/^[1-9]\d*$/.test(stakeUnits) || stakeUnits.length > 34) {
+      return res.status(400).json({
+        error: 'invalid_stake',
+        message: 'Stake must be a positive integer amount in USDC base units.',
+      });
+    }
     try {
       await cryptoApi.ensureUser(req.user.username);
-      for (const u of others) await cryptoApi.ensureUser(u.username).catch(() => {});
       const bps = Math.min(15000, Math.max(10000, Math.round(bonus.mult * 10000)));
       const ev = await cryptoApi.createEvent(req.user.username, act.label, stakeUnits, { multiplierBps: bps, startsAt: date });
-      await cryptoApi.rsvp(ev.id, req.user.username); // host stakes now
+      if (!ev || typeof ev.id !== 'string' || ev.id.length < 1) {
+        throw new cryptoApi.CryptoError(502, 'Crypto service returned an invalid event.', 'crypto_upstream_invalid');
+      }
       cryptoEventId = ev.id;
       stake = stakeUnits;
     } catch (e) {
-      const msg = e instanceof cryptoApi.CryptoError ? e.message : 'Could not set up the stake';
-      return res.status(e && e.status === 400 ? 400 : 502).json({ error: msg });
+      return sendCryptoError(res, e);
     }
   }
 
-  const info = db.prepare(`INSERT INTO hangouts
-    (creator_id, activity, activity_label, date, place, bonus_mult, bonus_reason, created_at, stake_units, crypto_event_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(req.user.id, act.id, act.label, date, place || 'Somewhere', bonus.mult, bonus.reason, now(), stake, cryptoEventId);
-  const hid = info.lastInsertRowid;
-  const ins = db.prepare('INSERT INTO hangout_members (hangout_id, user_id) VALUES (?, ?)');
-  for (const id of ids) ins.run(hid, id);
-  if (cryptoEventId) {
-    db.prepare('INSERT INTO hangout_stakes (hangout_id, user_id, staked_at) VALUES (?, ?, ?)')
-      .run(hid, req.user.id, now()); // host already staked above
-  }
+  const insertHangout = db.transaction(() => {
+    const info = db.prepare(`INSERT INTO hangouts
+      (creator_id, activity, activity_label, date, place, bonus_mult, bonus_reason, created_at, stake_units, crypto_event_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(req.user.id, act.id, act.label, date, place || 'Somewhere', bonus.mult, bonus.reason, now(), stake, cryptoEventId);
+    const hid = info.lastInsertRowid;
+    const ins = db.prepare('INSERT INTO hangout_members (hangout_id, user_id) VALUES (?, ?)');
+    for (const id of ids) ins.run(hid, id);
+    return hid;
+  });
+  const hid = insertHangout();
   res.json({ hangout: hangoutView(db.prepare('SELECT * FROM hangouts WHERE id = ?').get(hid), req.user.id) });
-});
+}));
 
 // A member stakes into an existing staked hangout ("put your deposit in").
-app.post('/hangouts/:id/stake', auth, async (req, res) => {
+app.post('/hangouts/:id/stake', auth, asyncRoute(async (req, res) => {
   const h = db.prepare('SELECT * FROM hangouts WHERE id = ?').get(req.params.id);
   if (!h || !memberIds(h.id).includes(req.user.id))
     return res.status(404).json({ error: 'Hangout not found' });
   if (!h.crypto_event_id) return res.status(400).json({ error: 'This hangout has no stake' });
-  if (h.settled_at) return res.status(400).json({ error: 'Already settled' });
+  if (h.settled_at) return res.status(409).json({ error: 'crypto_conflict', message: 'Already settled' });
   const already = db.prepare('SELECT 1 FROM hangout_stakes WHERE hangout_id = ? AND user_id = ?').get(h.id, req.user.id);
-  if (already) return res.status(400).json({ error: 'You already staked' });
-  try {
-    await cryptoApi.rsvp(h.crypto_event_id, req.user.username);
-  } catch (e) {
-    const msg = e instanceof cryptoApi.CryptoError ? e.message : 'Could not stake';
-    return res.status(e && e.status === 400 ? 400 : 502).json({ error: msg });
+  if (already) {
+    return res.json({ hangout: hangoutView(h, req.user.id) });
   }
-  db.prepare('INSERT INTO hangout_stakes (hangout_id, user_id, staked_at) VALUES (?, ?, ?)')
+  try {
+    await cryptoApi.ensureUser(req.user.username);
+    let remoteEvent = await cryptoApi.getEvent(h.crypto_event_id);
+    if (!remoteEvent || remoteEvent.id !== h.crypto_event_id || !Array.isArray(remoteEvent.rsvps)) {
+      throw new cryptoApi.CryptoError(502, 'Crypto service returned an invalid event.', 'crypto_upstream_invalid');
+    }
+    if (remoteEvent.status === 'settled') {
+      throw new cryptoApi.CryptoError(409, 'Already settled', 'crypto_conflict');
+    }
+    if (!cryptoEventRsvp(remoteEvent, req.user.username)) {
+      try {
+        remoteEvent = await cryptoApi.rsvp(h.crypto_event_id, req.user.username);
+      } catch (error) {
+        // A concurrent or response-lost RSVP may have succeeded. Re-read once
+        // and accept only a durable matching RSVP.
+        remoteEvent = await cryptoApi.getEvent(h.crypto_event_id);
+        if (!cryptoEventRsvp(remoteEvent, req.user.username)) throw error;
+      }
+    }
+    const rsvp = cryptoEventRsvp(remoteEvent, req.user.username);
+    if (!rsvp || !['staked', 'attended'].includes(rsvp.status) || rsvp.stakedUnits !== h.stake_units) {
+      throw new cryptoApi.CryptoError(502, 'Crypto service returned an invalid RSVP.', 'crypto_upstream_invalid');
+    }
+  } catch (e) {
+    return sendCryptoError(res, e);
+  }
+  db.prepare(`INSERT INTO hangout_stakes (hangout_id, user_id, staked_at) VALUES (?, ?, ?)
+    ON CONFLICT(hangout_id, user_id) DO NOTHING`)
     .run(h.id, req.user.id, now());
   res.json({ hangout: hangoutView(db.prepare('SELECT * FROM hangouts WHERE id = ?').get(h.id), req.user.id) });
-});
+}));
 
 // Settle the pool: flakers (staked but never checked in) lose their deposit to
 // the friends who actually showed. Allowed once the hangout has started.
-app.post('/hangouts/:id/settle', auth, async (req, res) => {
+app.post('/hangouts/:id/settle', auth, asyncRoute(async (req, res) => {
   const h = db.prepare('SELECT * FROM hangouts WHERE id = ?').get(req.params.id);
   if (!h || !memberIds(h.id).includes(req.user.id))
     return res.status(404).json({ error: 'Hangout not found' });
   if (!h.crypto_event_id) return res.status(400).json({ error: 'This hangout has no stake' });
-  if (h.settled_at) return res.status(400).json({ error: 'Already settled' });
+  if (h.settled_at) {
+    return res.json({ hangout: hangoutView(h, req.user.id) });
+  }
   if (new Date(h.date).getTime() > Date.now())
     return res.status(400).json({ error: 'Cannot settle before the hangout starts' });
   let result;
   try {
+    // Reconcile response-lost RSVPs into SQLite before attendance replay. Only
+    // known hangout members with the exact configured stake may be mirrored.
+    const remoteEvent = await cryptoApi.getEvent(h.crypto_event_id);
+    if (!remoteEvent || remoteEvent.id !== h.crypto_event_id || !Array.isArray(remoteEvent.rsvps)) {
+      throw new cryptoApi.CryptoError(502, 'Crypto service returned an invalid event.', 'crypto_upstream_invalid');
+    }
+    const members = new Map(memberIds(h.id).map((id) => {
+      const user = db.prepare('SELECT id, username FROM users WHERE id = ?').get(id);
+      return [cryptoApi.extId(user.username), user];
+    }));
+    const seenRemote = new Set();
+    const remoteStakes = [];
+    for (const rsvp of remoteEvent.rsvps) {
+      const user = rsvp && members.get(rsvp.userId);
+      if (
+        !user ||
+        seenRemote.has(rsvp.userId) ||
+        rsvp.stakedUnits !== h.stake_units ||
+        !['staked', 'attended', 'flaked', 'refunded'].includes(rsvp.status)
+      ) {
+        throw new cryptoApi.CryptoError(502, 'Crypto event does not match this hangout.', 'crypto_upstream_invalid');
+      }
+      seenRemote.add(rsvp.userId);
+      remoteStakes.push(user.id);
+    }
+    const reconcileStakes = db.transaction(() => {
+      const insert = db.prepare(`INSERT INTO hangout_stakes (hangout_id, user_id, staked_at)
+        VALUES (?, ?, ?) ON CONFLICT(hangout_id, user_id) DO NOTHING`);
+      for (const userId of remoteStakes) insert.run(h.id, userId, now());
+      // Remove legacy false-positive mirrors only when the authoritative event
+      // proves that no corresponding debit exists.
+      const mirrored = db.prepare(`SELECT hs.user_id, u.username
+        FROM hangout_stakes hs JOIN users u ON u.id = hs.user_id
+        WHERE hs.hangout_id = ?`).all(h.id);
+      const remove = db.prepare('DELETE FROM hangout_stakes WHERE hangout_id = ? AND user_id = ?');
+      for (const entry of mirrored) {
+        if (!seenRemote.has(cryptoApi.extId(entry.username))) remove.run(h.id, entry.user_id);
+      }
+    });
+    reconcileStakes();
+
+    // A local confirmation is the source of truth for physical attendance.
+    // Replay every confirmed staker before settlement; settlement must abort if
+    // even one attendance proof cannot be synced.
+    if (remoteEvent.status !== 'settled') {
+      const localStakes = db.prepare(`SELECT hs.user_id, u.username
+        FROM hangout_stakes hs JOIN users u ON u.id = hs.user_id
+        WHERE hs.hangout_id = ?`).all(h.id);
+      for (const staker of localStakes) {
+        const attended = db.prepare(`SELECT 1 FROM confirms
+          WHERE hangout_id = ? AND (u1 = ? OR u2 = ?) LIMIT 1`)
+          .get(h.id, staker.user_id, staker.user_id);
+        if (attended) await cryptoApi.checkin(h.crypto_event_id, staker.username);
+      }
+    }
     result = await cryptoApi.settle(h.crypto_event_id);
   } catch (e) {
-    const msg = e instanceof cryptoApi.CryptoError ? e.message : 'Could not settle';
-    return res.status(502).json({ error: msg });
+    return sendCryptoError(res, e);
   }
-  // Mirror the outcome locally so views need no crypto call.
-  const ins = db.prepare(`INSERT INTO hangout_settlements (hangout_id, user_id, status, payout_units)
-    VALUES (?, ?, ?, ?) ON CONFLICT(hangout_id, user_id) DO UPDATE SET status = excluded.status, payout_units = excluded.payout_units`);
-  for (const r of result.results || []) {
-    const uname = String(r.userId).replace(/^ty_/, '');
-    const u = db.prepare('SELECT id FROM users WHERE username = ?').get(uname);
-    if (u) ins.run(h.id, u.id, r.status, r.payoutUnits);
+
+  const localStakes = db.prepare(`SELECT hs.user_id, u.username
+    FROM hangout_stakes hs JOIN users u ON u.id = hs.user_id
+    WHERE hs.hangout_id = ? ORDER BY hs.user_id`).all(h.id);
+  const expected = new Map(localStakes.map((row) => [cryptoApi.extId(row.username), row]));
+  const seen = new Set();
+  const validated = [];
+  const validInteger = (value) => typeof value === 'string' && /^(0|[1-9]\d*)$/.test(value) && value.length <= 34;
+  if (
+    !result ||
+    result.eventId !== h.crypto_event_id ||
+    result.status !== 'settled' ||
+    !validInteger(result.forfeitPoolUnits) ||
+    !Array.isArray(result.results) ||
+    result.results.length !== expected.size
+  ) {
+    return sendCryptoError(res, new cryptoApi.CryptoError(
+      502, 'Crypto service returned an invalid settlement.', 'crypto_upstream_invalid',
+    ));
   }
-  db.prepare('UPDATE hangouts SET settled_at = ? WHERE id = ?').run(now(), h.id);
+  for (const entry of result.results) {
+    const local = entry && expected.get(entry.userId);
+    if (
+      !local ||
+      seen.has(entry.userId) ||
+      !['attended', 'flaked', 'refunded'].includes(entry.status) ||
+      entry.stakedUnits !== h.stake_units ||
+      !validInteger(entry.payoutUnits) ||
+      (entry.status === 'flaked' && entry.payoutUnits !== '0') ||
+      (entry.status === 'refunded' && entry.payoutUnits !== h.stake_units) ||
+      (entry.status === 'attended' && BigInt(entry.payoutUnits) < BigInt(h.stake_units))
+    ) {
+      return sendCryptoError(res, new cryptoApi.CryptoError(
+        502, 'Crypto service returned an invalid settlement.', 'crypto_upstream_invalid',
+      ));
+    }
+    seen.add(entry.userId);
+    validated.push({ ...entry, userId: local.user_id });
+  }
+  const expectedForfeit = validated
+    .filter((entry) => entry.status === 'flaked')
+    .reduce((sum, entry) => sum + BigInt(entry.stakedUnits), 0n);
+  if (BigInt(result.forfeitPoolUnits) !== expectedForfeit) {
+    return sendCryptoError(res, new cryptoApi.CryptoError(
+      502, 'Crypto service returned an invalid settlement.', 'crypto_upstream_invalid',
+    ));
+  }
+
+  // Views are driven by the local mirror. Replace the complete mirror and mark
+  // settled in one SQLite transaction so readers never observe half a payout.
+  const mirrorSettlement = db.transaction(() => {
+    db.prepare('DELETE FROM hangout_settlements WHERE hangout_id = ?').run(h.id);
+    const insert = db.prepare(`INSERT INTO hangout_settlements
+      (hangout_id, user_id, status, payout_units) VALUES (?, ?, ?, ?)`);
+    for (const entry of validated) {
+      insert.run(h.id, entry.userId, entry.status, entry.payoutUnits);
+    }
+    db.prepare('UPDATE hangouts SET settled_at = ? WHERE id = ? AND settled_at IS NULL').run(now(), h.id);
+  });
+  mirrorSettlement();
   res.json({ hangout: hangoutView(db.prepare('SELECT * FROM hangouts WHERE id = ?').get(h.id), req.user.id) });
-});
+}));
 
 app.get('/hangouts', auth, (req, res) => {
   const rows = db.prepare(`SELECT h.* FROM hangouts h
@@ -797,7 +1138,7 @@ app.get('/hangouts/:id/nfc-token', auth, (req, res) => {
 });
 
 // The "scan" phone posts what it read.
-app.post('/hangouts/:id/confirm', auth, (req, res) => {
+app.post('/hangouts/:id/confirm', auth, asyncRoute(async (req, res) => {
   const h = db.prepare('SELECT * FROM hangouts WHERE id = ?').get(req.params.id);
   if (!h || !memberIds(h.id).includes(req.user.id))
     return res.status(404).json({ error: 'Hangout not found' });
@@ -806,11 +1147,13 @@ app.post('/hangouts/:id/confirm', auth, (req, res) => {
   if (!other || !memberIds(h.id).includes(other.id))
     return res.status(400).json({ error: 'That person is not in this hangout' });
   if (other.id === req.user.id) return res.status(400).json({ error: 'Cannot confirm with yourself' });
-  const t = db.prepare('SELECT * FROM nfc_tokens WHERE hangout_id = ? AND user_id = ?').get(h.id, other.id);
-  if (!t || t.token !== token || t.expires_at < Date.now())
-    return res.status(400).json({ error: 'Tap not valid, try again' });
   const [u1, u2] = pair(req.user.id, other.id);
   const already = db.prepare('SELECT 1 FROM confirms WHERE hangout_id = ? AND u1 = ? AND u2 = ?').get(h.id, u1, u2);
+  if (!already) {
+    const t = db.prepare('SELECT * FROM nfc_tokens WHERE hangout_id = ? AND user_id = ?').get(h.id, other.id);
+    if (!t || t.token !== token || t.expires_at < Date.now())
+      return res.status(400).json({ error: 'Tap not valid, try again' });
+  }
   let vibeGain = 0;
   let acornGain = 0;
   if (!already) {
@@ -828,13 +1171,17 @@ app.post('/hangouts/:id/confirm', auth, (req, res) => {
       }
     }
     maybeComplete(h.id);
-    // Proof of presence: check in each staker on the crypto event (best-effort).
-    if (h.crypto_event_id) {
-      for (const [uid, uname] of [[req.user.id, req.user.username], [other.id, other.username]]) {
-        const staked = db.prepare('SELECT 1 FROM hangout_stakes WHERE hangout_id = ? AND user_id = ?').get(h.id, uid);
-        if (staked) cryptoApi.checkin(h.crypto_event_id, uname).catch(() => {});
-      }
+  }
+  // Retry attendance sync even when this confirmation already existed (for
+  // example, because a previous crypto response was lost). A failed check-in
+  // never erases local proof; settlement replays it as a hard safety boundary.
+  if (h.crypto_event_id) {
+    const checkins = [];
+    for (const [uid, uname] of [[req.user.id, req.user.username], [other.id, other.username]]) {
+      const staked = db.prepare('SELECT 1 FROM hangout_stakes WHERE hangout_id = ? AND user_id = ?').get(h.id, uid);
+      if (staked) checkins.push(cryptoApi.checkin(h.crypto_event_id, uname));
     }
+    await Promise.allSettled(checkins);
   }
   res.json({
     hangout: hangoutView(db.prepare('SELECT * FROM hangouts WHERE id = ?').get(h.id), req.user.id),
@@ -842,7 +1189,7 @@ app.post('/hangouts/:id/confirm', auth, (req, res) => {
     acornGain,
     bonusReason: h.bonus_reason,
   });
-});
+}));
 
 // ---------- memory book ----------
 app.get('/memories', auth, (req, res) => {
@@ -892,8 +1239,8 @@ app.post('/secret/acorns', auth, (req, res) => {
 });
 
 // ---------- wallet (USDC via Unifold treasury) ----------
-app.get('/wallet', auth, async (req, res) => {
-  if (!cryptoApi.enabled()) return res.json({ enabled: false });
+app.get('/wallet', auth, asyncRoute(async (req, res) => {
+  if (!(await cryptoApi.ready())) return res.json({ enabled: false });
   try {
     const w = await cryptoApi.getWallet(req.user.username);
     res.json({
@@ -904,42 +1251,79 @@ app.get('/wallet', auth, async (req, res) => {
       withdrawals: w.withdrawals,
     });
   } catch (e) {
-    res.status(502).json({ enabled: true, error: e.message });
+    return sendCryptoError(res, e);
   }
-});
+}));
 
-app.post('/wallet/add-funds', auth, async (req, res) => {
-  if (!cryptoApi.enabled()) return res.status(400).json({ error: 'Crypto is off' });
+app.post('/wallet/add-funds', auth, asyncRoute(async (req, res) => {
   try {
     const r = await cryptoApi.addFunds(req.user.username);
     res.json(r);
   } catch (e) {
-    res.status(502).json({ error: e.message });
+    return sendCryptoError(res, e);
   }
-});
+}));
 
-app.post('/wallet/refresh', auth, async (req, res) => {
-  if (!cryptoApi.enabled()) return res.status(400).json({ error: 'Crypto is off' });
+app.post('/wallet/refresh', auth, asyncRoute(async (req, res) => {
   try {
     const r = await cryptoApi.refreshDeposits(req.user.username);
     res.json(r);
   } catch (e) {
-    res.status(502).json({ error: e.message });
+    return sendCryptoError(res, e);
   }
-});
+}));
 
-app.post('/wallet/withdraw', auth, async (req, res) => {
-  if (!cryptoApi.enabled()) return res.status(400).json({ error: 'Crypto is off' });
+app.post('/wallet/withdraw', auth, asyncRoute(async (req, res) => {
   const { amountUnits, destination } = req.body || {};
-  try {
-    const r = await cryptoApi.withdraw(req.user.username, amountUnits, destination);
-    res.json(r);
-  } catch (e) {
-    const status = e instanceof cryptoApi.CryptoError && e.status === 400 ? 400 : 502;
-    res.status(status).json({ error: e.message });
+  const keys = [];
+  for (let index = 0; index < req.rawHeaders.length; index += 2) {
+    if (req.rawHeaders[index] && req.rawHeaders[index].toLowerCase() === 'idempotency-key') {
+      keys.push(req.rawHeaders[index + 1] || '');
+    }
   }
-});
+  if (keys.length !== 1 || !cryptoApi.validIdempotencyKey(keys[0])) {
+    return res.status(400).json({
+      error: 'invalid_idempotency_key',
+      message: 'Exactly one valid Idempotency-Key header is required (8-128 characters).',
+    });
+  }
+  try {
+    const result = await cryptoApi.withdraw(req.user.username, amountUnits, destination, keys[0]);
+    return res.status(result.status).json(result.data);
+  } catch (e) {
+    return sendCryptoError(res, e);
+  }
+}));
 
 app.get('/health', (_req, res) => res.json({ ok: true, name: 'tomo-yard' }));
 
-app.listen(PORT, () => console.log(`Tomo Yard server on :${PORT}`));
+// Auth0's verifier reports failures through Express errors. Keep the public
+// response stable and non-sensitive while preserving its Bearer challenge.
+app.use((error, _req, res, _next) => {
+  if (error instanceof AuthConfigurationError ||
+      error && error.name === 'AuthConfigurationError') {
+    return res.status(503).json({
+      error: error.code || 'AUTH0_CONFIGURATION_ERROR',
+      message: 'Auth0 authentication is temporarily unavailable',
+    });
+  }
+
+  const status = Number(error && (error.statusCode || error.status));
+  if (status === 401 || status === 403) {
+    if (error.headers && typeof error.headers === 'object') res.set(error.headers);
+    else if (status === 401) res.setHeader('WWW-Authenticate', 'Bearer');
+    return res.status(status).json({
+      error: error.code || (status === 401 ? 'invalid_token' : 'forbidden'),
+      message: status === 401 ? 'Authentication required' : 'Access forbidden',
+    });
+  }
+
+  console.error(error);
+  return res.status(500).json({ error: 'server_error', message: 'Internal server error' });
+});
+
+if (require.main === module) {
+  app.listen(PORT, () => console.log(`Tomo Yard server on :${PORT}`));
+}
+
+module.exports = { app, db };

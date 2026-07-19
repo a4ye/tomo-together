@@ -5,12 +5,15 @@
 // NOTE: wired against the real Unifold deposit-addresses endpoint but NOT tested —
 // it's the "add funds is supported but doesn't have to be tested" path. Uses a raw
 // fetch so it compiles regardless of the SDK's exact method surface.
-import { UNIFOLD_SECRET_KEY, TREASURY_ACCOUNT_ID, CHAIN_ID } from './config.js';
+import {
+  UNIFOLD_SECRET_KEY,
+  TREASURY_ACCOUNT_ID,
+  CHAIN_ID,
+  USDC_BASE_TOKEN_ADDRESS,
+} from './config.js';
 import { unifold } from './unifold.js';
 
 // Native Circle USDC on Base — the token deposits are converted into.
-const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
-
 export async function addFunds(externalUserId: string): Promise<{
   treasuryAddress: string;
   depositAddresses: unknown;
@@ -28,7 +31,7 @@ export async function addFunds(externalUserId: string): Promise<{
       external_user_id: externalUserId,
       destination_chain_type: 'ethereum',
       destination_chain_id: String(CHAIN_ID),
-      destination_token_address: USDC_BASE,
+      destination_token_address: USDC_BASE_TOKEN_ADDRESS,
       recipient_address: acct.address,
       action_type: 'deposit',
     }),

@@ -13,10 +13,13 @@ expo-env.d.ts
 .kotlin/
 *.orig.*
 *.jks
+*.keystore
 *.p8
 *.p12
+*.pfx
 *.key
 *.mobileprovision
+*.[Pp]ublish[Ss]ettings
 
 # Metro
 .metro-health-check*
@@ -30,8 +33,14 @@ yarn-error.*
 .DS_Store
 *.pem
 
-# local env files
-.env*.local
+# local environment files and direnv state
+.env
+.env.*
+.envrc
+.direnv/
+# Templates are intentionally safe to track.
+!.env.example
+!**/.env.example
 
 # typescript
 *.tsbuildinfo
@@ -41,14 +50,28 @@ yarn-error.*
 
 # live credentials — never commit
 somevariables.txt
-infra/*.tfvars
+[Aa][Uu][Tt][Hh]0.txt
 
 # terraform
-infra/.terraform/
-infra/*.tfstate
-infra/*.tfstate.*
-infra/.terraform.lock.hcl.tmp
-infra/crash.log
+**/.terraform/
+*.tfvars
+*.tfvars.json
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+.terraform.lock.hcl.tmp
+# Sanitized examples may be committed deliberately.
+!*.tfvars.example
+!*.tfvars.json.example
 
 # generated native folders
 /ios

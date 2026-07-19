@@ -12,10 +12,15 @@ write_files:
     permissions: "0755"
     content: |
       #!/usr/bin/env bash
-      # Fast APK build: persistent clone + node_modules + warm gradle daemon.
-      # Expects env: SHA, GH_TOKEN, KUDU_USER, KUDU_PASS, KEYSTORE_B64, KEYSTORE_PASS
+      # Bootstrap fallback for manual builds. GitHub Actions uploads and runs
+      # infra/build-apk-remote.sh on every build, including on existing VMs
+      # whose cloud-init custom_data no longer changes.
       set -euo pipefail
       : "${SHA:?}" "${GH_TOKEN:?}" "${KUDU_USER:?}" "${KUDU_PASS:?}" "${KEYSTORE_B64:?}" "${KEYSTORE_PASS:?}"
+      : "${EXPO_PUBLIC_AUTH0_DOMAIN:?}" "${EXPO_PUBLIC_AUTH0_CLIENT_ID:?}"
+      : "${EXPO_PUBLIC_AUTH0_WEB_CLIENT_ID:?}" "${EXPO_PUBLIC_AUTH0_AUDIENCE:?}"
+      export EXPO_PUBLIC_AUTH0_DOMAIN EXPO_PUBLIC_AUTH0_CLIENT_ID
+      export EXPO_PUBLIC_AUTH0_WEB_CLIENT_ID EXPO_PUBLIC_AUTH0_AUDIENCE
       export ANDROID_HOME=/opt/android-sdk
       export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
       export PATH="$JAVA_HOME/bin:$PATH"
@@ -43,7 +48,8 @@ write_files:
       "
       cat version.json
 
-      npx expo prebuild --platform android --no-install
+      EXPO_NO_GIT_STATUS=1 npx expo prebuild --clean --platform android --no-install
+      bash infra/build-apk-remote.sh --configure-metro-cache-only
       printf '%s' "$KEYSTORE_B64" | base64 -d > android/app/upload.keystore
       printf '\norg.gradle.parallel=true\norg.gradle.caching=true\norg.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g\n' >> android/gradle.properties
       cd android

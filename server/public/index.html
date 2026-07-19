@@ -32,6 +32,9 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html,body{overflow-x:clip}
 html{-webkit-text-size-adjust:100%}
+@media (prefers-reduced-motion: no-preference){
+  html{scroll-behavior:smooth}
+}
 body{
   background:var(--tan);
   color:var(--dark);
@@ -425,9 +428,9 @@ a{color:inherit;text-decoration:none}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .bigmark{
   position:relative;
-  /* sit above the fixed continuity backdrop (world/tints/travelers top out at
-     z-index 7) so the footer is visible on the animated page, like the scenes */
-  z-index:8;
+  /* The continuity cast is fixed at z-index 20. The footer is the proscenium
+     they duck behind, so it must paint above them at the end of the story. */
+  z-index:30;
   background:var(--tan);
   border-top:5px solid var(--dark);
   padding-top:34px;
@@ -934,6 +937,11 @@ a{color:inherit;text-decoration:none}
   ScrollTrigger.config({ ignoreMobileResize: true });
 
   var q = function(s){ return document.querySelector(s); };
+  /* Numeric scrub adds a short visual catch-up without changing native wheel,
+     keyboard, or touch scrolling. Keep handoffs a little crisper than scenes. */
+  var SCRUB_SCENE = .9;
+  var SCRUB_HANDOFF = .75;
+  var SCRUB_WORLD = 1.15;
   document.body.classList.add('wld'); // world spine on (fallbacks never reach this line)
 
   /* ---------- world helpers + waypoint tables ---------- */
@@ -975,7 +983,7 @@ a{color:inherit;text-decoration:none}
   }
   function zone(sel, fn){
     var tl = gsap.timeline({ scrollTrigger: {
-      trigger: sel, start: 'top bottom', end: 'top top', scrub: .7, invalidateOnRefresh: true
+      trigger: sel, start: 'top bottom', end: 'top top', scrub: SCRUB_HANDOFF, invalidateOnRefresh: true
     }});
     fn(tl);
     tl.to({}, { duration: .001 }, 1);
@@ -1019,18 +1027,18 @@ a{color:inherit;text-decoration:none}
     .from('.hint', { opacity: 0, y: -10, duration: .4, ease: 'power1.out' }, '-=.2');
 
   /* ---------- clouds: one slow parallax across the whole page ---------- */
-  gsap.timeline({ scrollTrigger: { trigger: 'main', start: 'top top', end: 'max', scrub: 1, invalidateOnRefresh: true } })
+  gsap.timeline({ scrollTrigger: { trigger: 'main', start: 'top top', end: 'max', scrub: SCRUB_WORLD, invalidateOnRefresh: true } })
     .to('#wclA', { x: function(){ return vw(30); }, ease: 'none', snap: { x: 2 } }, 0)
     .to('#wclB', { x: function(){ return vw(14); }, ease: 'none', snap: { x: 2 } }, 0);
 
   /* ---------- 1 -> 2: wordmark scatters, acorn sprouts, hill morphs into band ---------- */
-  gsap.timeline({ scrollTrigger: { trigger: '.sc-hero', start: 'top top', end: 'bottom top', scrub: .7, invalidateOnRefresh: true } })
-    .to('.hero-copy', { y: '-6vh', ease: 'none' }, 0)
-    .to('.ltr', { y: function(i){ return -sv(26 + ((i * 17) % 23)); },
-                  x: function(i){ return (i % 2 ? 1 : -1) * vw(2 + (i * 5) % 6); },
+  gsap.timeline({ scrollTrigger: { trigger: '.sc-hero', start: 'top top', end: 'bottom top', scrub: SCRUB_SCENE, invalidateOnRefresh: true } })
+    .to('.hero-copy', { y: '-2vh', ease: 'none' }, 0)
+    .to('.ltr', { y: function(i){ return (i % 2 ? -1 : 1) * sv(2 + (i % 3)); },
+                  x: function(i){ var side = i < 4 ? -1 : 1; return side * vw(42 + (i % 3) * 5); },
                   rotation: function(i){ return (i % 2 ? 1 : -1) * (6 + (i * 3) % 9); },
-                  duration: .55, ease: 'steps(9)', stagger: { each: .03, from: 'center' } }, .06)
-    .to('.tagline', { y: -60, autoAlpha: 0, duration: .3, ease: 'steps(5)' }, .1)
+                  autoAlpha: 0, duration: .62, ease: 'steps(10)', stagger: { each: .025, from: 'center' } }, .06)
+    .to('.tagline', { x: function(){ return vw(44); }, autoAlpha: 0, duration: .38, ease: 'steps(7)' }, .1)
     .to('.hint-txt', { autoAlpha: 0, duration: .12 }, 0)
     .to('.hint-acorn', { y: 26, duration: .2, ease: 'steps(3)' }, .05)
     .to('.hint-acorn', { opacity: 0, duration: .03, ease: 'steps(1)' }, .3)
@@ -1038,7 +1046,7 @@ a{color:inherit;text-decoration:none}
     .to('.hint-sprout', { scale: 1, duration: .25, ease: 'steps(3)' }, .33)
     .call(function(){}, null, .5);
   (function(){
-    var t = gsap.timeline({ scrollTrigger: { trigger: '.sc-hero', start: 'top top', end: 'bottom top', scrub: .7, invalidateOnRefresh: true } });
+    var t = gsap.timeline({ scrollTrigger: { trigger: '.sc-hero', start: 'top top', end: 'bottom top', scrub: SCRUB_SCENE, invalidateOnRefresh: true } });
     bandTo(t, .3, .55, 2, 6);
     t.to('#wcat', { y: function(){ return -(sv(BH[2]) - 26); }, scale: CATS[2], duration: .55, ease: 'steps(6)' }, .3);
     sunSeg(t, 1, .9, .05);
@@ -1054,12 +1062,12 @@ a{color:inherit;text-decoration:none}
     btnHidden = true;
     gsap.killTweensOf('.dl-btn-w');
     if (performance.now() - bootT < 600) { // reload mid-page: no theatrics
-      gsap.set('.dl-btn-w', { visibility: 'hidden', y: -innerHeight });
+      gsap.set('.dl-btn-w', { visibility: 'hidden', x: 1.15 * innerWidth });
       return;
     }
     gsap.timeline()
       .to('.dl-btn-w', { scaleY: .68, scaleX: 1.22, duration: .11, ease: 'power2.in' })
-      .to('.dl-btn-w', { scaleY: 1.18, scaleX: .86, y: -1.15 * innerHeight,
+      .to('.dl-btn-w', { scaleY: 1.18, scaleX: .86, x: 1.15 * innerWidth, y: -8,
                          duration: .58, ease: 'back.in(1.3)' })
       .set('.dl-btn-w', { visibility: 'hidden' });
     gsap.fromTo('.puff',
@@ -1073,8 +1081,8 @@ a{color:inherit;text-decoration:none}
     btnHidden = false;
     gsap.killTweensOf('.dl-btn-w');
     gsap.timeline()
-      .set('.dl-btn-w', { visibility: 'visible', y: -1.15 * innerHeight, scaleX: 1, scaleY: 1 })
-      .to('.dl-btn-w', { y: 0, duration: .7, ease: 'bounce.out' })
+      .set('.dl-btn-w', { visibility: 'visible', x: 1.15 * innerWidth, y: 0, scaleX: 1, scaleY: 1 })
+      .to('.dl-btn-w', { x: 0, duration: .7, ease: 'bounce.out' })
       .to('.dl-btn-w', { scaleY: .84, scaleX: 1.12, duration: .09, ease: 'power2.out' })
       .to('.dl-btn-w', { scaleY: 1, scaleX: 1, duration: .35, ease: 'elastic.out(1.4,.5)' });
   }
@@ -1088,7 +1096,7 @@ a{color:inherit;text-decoration:none}
   var fbW   = [80, 68, 76, 82, 60];
   gsap.set(friends.join(','), { x: function(i){ return fromX[i]; } });
   var ftl = gsap.timeline({ scrollTrigger: {
-    trigger: '.sc-friends', start: 'top top', end: '+=150%', scrub: .5, pin: true, anticipatePin: 1, invalidateOnRefresh: true
+    trigger: '.sc-friends', start: 'top top', end: '+=150%', scrub: SCRUB_SCENE, pin: true, anticipatePin: 1, invalidateOnRefresh: true
   }});
   friends.forEach(function(s, i){
     ftl.to(s, { x: 0, duration: 1.4, ease: 'steps(22)' }, i * .7);
@@ -1106,7 +1114,7 @@ a{color:inherit;text-decoration:none}
                 scale: 46 / fbW[i], transformOrigin: '50% 100%',
                 duration: 1.5, ease: 'steps(10)' }, 8 + i * .06);
   });
-  ftl.to('.sc-friends .line', { y: -40, autoAlpha: 0, duration: .8, ease: 'steps(6)' }, 8.1);
+  ftl.to('.sc-friends .line', { x: function(){ return -vw(42); }, autoAlpha: 0, duration: .9, ease: 'steps(8)' }, 8.1);
   ftl.to(friends.join(','), { autoAlpha: 0, duration: .1, ease: 'steps(1)' }, 9.78);
   ftl.to('.waud', { autoAlpha: 1, duration: .1, ease: 'steps(1)' }, 9.8);
   sunSeg(ftl, 2, 10, 0);
@@ -1128,7 +1136,7 @@ a{color:inherit;text-decoration:none}
   gsap.set('.badge', { scale: 0 });
   gsap.set('.sc-duel .line', { opacity: 0, y: 24 });
   var dtl = gsap.timeline({ scrollTrigger: {
-    trigger: '.sc-duel', start: 'top top', end: '+=170%', scrub: .5, pin: true, anticipatePin: 1, invalidateOnRefresh: true
+    trigger: '.sc-duel', start: 'top top', end: '+=170%', scrub: SCRUB_SCENE, pin: true, anticipatePin: 1, invalidateOnRefresh: true
   }});
   dtl.to('.sc-duel .line', { opacity: 1, y: 0, duration: .4, ease: 'back.out(2)' }, 0)
     .to('.card-l', { y: 0, duration: 1.5, ease: 'steps(14)' }, .3)
@@ -1144,7 +1152,7 @@ a{color:inherit;text-decoration:none}
     .to('.card-l', { y: -10, duration: .2, yoyo: true, repeat: 1, ease: 'power1.inOut' }, 6.1);
   /* exit: winning panel carries to center-low and pixel-flips into the polaroid */
   var cardL = q('.card-l');
-  dtl.to('.sc-duel .line', { y: -36, autoAlpha: 0, duration: .6, ease: 'steps(5)' }, 8)
+  dtl.to('.sc-duel .line', { x: function(){ return vw(38); }, autoAlpha: 0, duration: .72, ease: 'steps(7)' }, 8)
     .to('.card-l', { x: function(){ var p = secPos(cardL); return vw(50) - (p.x + p.w / 2); },
                      y: function(){ var p = secPos(cardL); return sv(58) - (p.y + p.h / 2); },
                      scaleX: .62, scaleY: .62, transformOrigin: '50% 50%',
@@ -1181,7 +1189,7 @@ a{color:inherit;text-decoration:none}
   function carryX(){ return vw(78) - q('#wpol').offsetWidth / 2; }
   function carryY(){ return innerHeight - sv(16) - q('#wpol').offsetHeight + 16; }
   var ptl = gsap.timeline({ scrollTrigger: {
-    trigger: '.sc-photo', start: 'top top', end: '+=150%', scrub: .5, pin: true, anticipatePin: 1, invalidateOnRefresh: true
+    trigger: '.sc-photo', start: 'top top', end: '+=150%', scrub: SCRUB_SCENE, pin: true, anticipatePin: 1, invalidateOnRefresh: true
   }});
   ptl.to('#wpol', { x: function(){ var p = secPos(bigPol); return (p.x + p.w / 2) - q('#wpol').offsetWidth / 2; },
                     y: function(){ var p = secPos(bigPol); return (p.y + p.h / 2) - q('#wpol').offsetHeight / 2; },
@@ -1196,7 +1204,7 @@ a{color:inherit;text-decoration:none}
     .to('#wpol .devcov', { opacity: 0, duration: .05, ease: 'steps(1)' }, 3.7)
     .to('.sc-photo .line', { scale: 1.06, duration: .2, yoyo: true, repeat: 1 }, 4.1);
   /* exit: photo shrinks to carrying size and tucks in beside the cat */
-  ptl.to('.sc-photo .line', { y: -36, autoAlpha: 0, duration: .6, ease: 'steps(5)' }, 8)
+  ptl.to('.sc-photo .line', { x: function(){ return -vw(40); }, autoAlpha: 0, duration: .72, ease: 'steps(7)' }, 8)
     .to('.big-pol', { x: function(){ var p = secPos(bigPol); return (carryX() + q('#wpol').offsetWidth / 2) - (p.x + p.w / 2); },
                       y: function(){ var p = secPos(bigPol); return (carryY() + q('#wpol').offsetHeight / 2) - (p.y + p.h / 2); },
                       scale: function(){ return q('#wpol').offsetWidth / secPos(bigPol).w; },
@@ -1232,7 +1240,7 @@ a{color:inherit;text-decoration:none}
   gsap.set('.rain', { y: '-75vh', autoAlpha: 0 });
   gsap.set('.sc-tap .line', { opacity: 0, y: 24 });
   var ttl = gsap.timeline({ scrollTrigger: {
-    trigger: '.sc-tap', start: 'top top', end: '+=200%', scrub: .5, pin: true, anticipatePin: 1, invalidateOnRefresh: true
+    trigger: '.sc-tap', start: 'top top', end: '+=200%', scrub: SCRUB_SCENE, pin: true, anticipatePin: 1, invalidateOnRefresh: true
   }});
   ttl.to('.sc-tap .line', { opacity: 1, y: 0, duration: .4, ease: 'back.out(2)' }, 0)
      .to('.phone-l', { x: 0, duration: 1, ease: 'power2.out' }, .3)
@@ -1257,7 +1265,7 @@ a{color:inherit;text-decoration:none}
   /* exit: acorns roll off toward the wall; the last pulse squares over the screen */
   ttl.to('.rain', { x: function(){ return vw(120); }, duration: 1.6, ease: 'steps(20)', stagger: .06 }, 9.5)
      .to('.rain', { rotation: 810, duration: 1.6, ease: 'steps(9)', stagger: .06 }, 9.5)
-     .to('.sc-tap .line', { y: -36, autoAlpha: 0, duration: .6, ease: 'steps(5)' }, 9.6)
+     .to('.sc-tap .line', { x: function(){ return vw(42); }, autoAlpha: 0, duration: .72, ease: 'steps(7)' }, 9.6)
      .to('.r3', { opacity: .95, duration: .05, ease: 'steps(1)' }, 10.5)
      .to('.r3', { scale: 24, duration: 1.2, ease: 'steps(8)' }, 10.55)
      .fromTo('#shT,#shB', { scaleY: 0 }, { scaleY: 1, duration: .7, ease: 'steps(5)', immediateRender: false }, 11.2)
@@ -1290,7 +1298,7 @@ a{color:inherit;text-decoration:none}
   gsap.set('.roll-a', { x: function(){ return -vw(60); }, rotation: -720 });
   var memT = q('.mem-travel');
   var btl = gsap.timeline({ scrollTrigger: {
-    trigger: '.sc-book', start: 'top top', end: '+=180%', scrub: .5, pin: true, anticipatePin: 1, invalidateOnRefresh: true
+    trigger: '.sc-book', start: 'top top', end: '+=180%', scrub: SCRUB_SCENE, pin: true, anticipatePin: 1, invalidateOnRefresh: true
   }});
   btl.to('#wpol', { x: function(){ var p = secPos(memT); return (p.x + p.w / 2) - q('#wpol').offsetWidth / 2; },
                    y: function(){ var p = secPos(memT); return (p.y + p.h / 2) - q('#wpol').offsetHeight / 2; },
@@ -1306,12 +1314,14 @@ a{color:inherit;text-decoration:none}
     .to('.mem-pol:not(.mem-travel) .mem-pin', { scale: 1, duration: .3, ease: 'back.out(3.5)', stagger: .3 }, 2.42)
     .to('.strike', { scaleX: 1, duration: .45, ease: 'steps(9)' }, 4.6)
     .to('.empty-line', { opacity: .45, duration: .3 }, 4.75);
-  /* exit: pins pop off, polaroids tilt and fly up and away */
+  /* exit: pins pop, then the wall is cleared sideways like shuffled prints */
   btl.to('.mem-pin', { scale: 0, duration: .16, ease: 'steps(2)', stagger: .05 }, 8)
-    .to('.mem-pol', { y: function(){ return -sv(96); },
+    .to('.mem-pol', { x: function(i){ return (i % 2 ? -1 : 1) * vw(70 + (i % 3) * 6); },
+                      y: function(i){ return (i % 3 - 1) * sv(5); },
                       rotation: function(i){ return (i % 2 ? 1 : -1) * (7 + i * 2); },
                       duration: 1.6, ease: 'power1.in', stagger: .08 }, 8.25)
-    .to('.empty-wrap', { y: function(){ return -sv(85); }, rotation: -5, duration: 1.4, ease: 'power1.in' }, 8.45);
+    .to('.empty-wrap', { x: function(){ return vw(82); }, y: function(){ return -sv(4); },
+                         rotation: 5, duration: 1.4, ease: 'power1.in' }, 8.45);
   sunSeg(btl, 10, 10, 0);
   bflySeg(btl, 10, 9, .5);
   btl.to({}, { duration: .001 }, 10);
@@ -1358,6 +1368,13 @@ a{color:inherit;text-decoration:none}
     onEnter: crownOn, onLeaveBack: crownOff,
     onRefresh: function(self){ if (self.progress > 0) crownOn(); }
   });
+
+  /* The fixed continuity cast ducks below the garden edge as the real footer
+     arrives. Native scrolling remains untouched; the higher footer masks them. */
+  gsap.timeline({ scrollTrigger: {
+    trigger: '.bigmark', start: 'top bottom', end: 'top 68%',
+    scrub: SCRUB_HANDOFF, invalidateOnRefresh: true
+  }}).to('#trav', { y: function(){ return sv(34); }, ease: 'none' }, 0);
 
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(function(){ ScrollTrigger.refresh(); });
 })();

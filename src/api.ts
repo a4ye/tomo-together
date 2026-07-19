@@ -1,7 +1,7 @@
 import { FileSystemUploadType, uploadAsync } from 'expo-file-system/legacy';
 import {
   Activity, FriendCard, FriendProfile, FriendView, Hangout, Holiday, Me, PublicUser,
-  Suggestion, Wallet, WardrobeItem,
+  Suggestion, Wallet, WardrobeItem, WithdrawalDestination, WithdrawalResult,
 } from './types';
 
 export class ApiError extends Error {
@@ -12,14 +12,22 @@ export class ApiError extends Error {
   }
 }
 
+export type AccessTokenSource = string | null | (() => Promise<string | null>);
+
+async function resolveAccessToken(source: AccessTokenSource): Promise<string | null> {
+  return typeof source === 'function' ? source() : source;
+}
+
 async function call<T>(
   serverUrl: string,
-  token: string | null,
+  tokenSource: AccessTokenSource,
   method: string,
   path: string,
-  body?: unknown
+  body?: unknown,
+  requestHeaders: Record<string, string> = {},
 ): Promise<T> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...requestHeaders };
+  const token = await resolveAccessToken(tokenSource);
   if (token) headers.Authorization = `Bearer ${token}`;
   let payload: BodyInit | undefined;
   if (body instanceof FormData) {
@@ -41,11 +49,22 @@ async function call<T>(
     clearTimeout(timer);
   }
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(res.status, (json as { error?: string }).error || 'Request failed');
+  if (!res.ok) {
+    const error = json as { error?: string; message?: string };
+    throw new ApiError(res.status, error.message || error.error || 'Request failed');
+  }
   return json as T;
 }
 
-export function makeApi(serverUrl: string, token: string | null) {
+export type AuthProfileInput = {
+  username: string;
+  name: string;
+  birthday: string;
+  color: string;
+  species: string;
+};
+
+export function makeApi(serverUrl: string, tokenSource: AccessTokenSource) {
   return {
     register: (b: {
       username: string; name: string; birthday: string; password: string;
@@ -54,57 +73,66 @@ export function makeApi(serverUrl: string, token: string | null) {
       call<{ token: string; me: Me }>(serverUrl, null, 'POST', '/auth/register', b),
     login: (b: { username: string; password: string }) =>
       call<{ token: string; me: Me }>(serverUrl, null, 'POST', '/auth/login', b),
-    me: () => call<{ me: Me }>(serverUrl, token, 'GET', '/me'),
+    authProfile: () => call<{ me: Me | null }>(serverUrl, tokenSource, 'GET', '/auth/profile'),
+    saveAuthProfile: (body: AuthProfileInput) =>
+      call<{ me: Me }>(serverUrl, tokenSource, 'PUT', '/auth/profile', body),
+    me: () => call<{ me: Me }>(serverUrl, tokenSource, 'GET', '/me'),
     setAvatar: (b: { color: string; equipped: string[]; species: string }) =>
-      call<{ me: Me }>(serverUrl, token, 'PUT', '/me/avatar', b),
+      call<{ me: Me }>(serverUrl, tokenSource, 'PUT', '/me/avatar', b),
     catalog: () =>
       call<{ activities: Activity[]; items: WardrobeItem[]; holidays: Holiday[] }>(
         serverUrl, null, 'GET', '/catalog'),
     searchUsers: (q: string) =>
-      call<{ users: PublicUser[] }>(serverUrl, token, 'GET', `/users/search?q=${encodeURIComponent(q)}`),
+      call<{ users: PublicUser[] }>(serverUrl, tokenSource, 'GET', `/users/search?q=${encodeURIComponent(q)}`),
     friends: () =>
       call<{ friends: FriendView[]; incoming: FriendView[]; outgoing: FriendView[] }>(
-        serverUrl, token, 'GET', '/friends'),
+        serverUrl, tokenSource, 'GET', '/friends'),
     friendProfile: (username: string) =>
       call<{ friend: FriendProfile }>(
-        serverUrl, token, 'GET', `/friends/${encodeURIComponent(username)}`),
+        serverUrl, tokenSource, 'GET', `/friends/${encodeURIComponent(username)}`),
     requestFriend: (username: string) =>
-      call<{ ok: boolean; accepted: boolean }>(serverUrl, token, 'POST', '/friends/request', { username }),
+      call<{ ok: boolean; accepted: boolean }>(serverUrl, tokenSource, 'POST', '/friends/request', { username }),
     acceptFriend: (username: string) =>
-      call<{ ok: boolean }>(serverUrl, token, 'POST', '/friends/accept', { username }),
+      call<{ ok: boolean }>(serverUrl, tokenSource, 'POST', '/friends/accept', { username }),
     friendCard: (username: string) =>
-      call<{ card: FriendCard }>(serverUrl, token, 'GET', `/friends/${encodeURIComponent(username)}/card`),
+      call<{ card: FriendCard }>(serverUrl, tokenSource, 'GET', `/friends/${encodeURIComponent(username)}/card`),
     suggestion: () =>
-      call<{ suggestion: Suggestion | null }>(serverUrl, token, 'GET', '/suggestions'),
+      call<{ suggestion: Suggestion | null }>(serverUrl, tokenSource, 'GET', '/suggestions'),
     rankedActivities: (withUsernames: string[]) =>
       call<{ activities: Activity[] }>(
-        serverUrl, token, 'GET', `/activities/ranked?with=${withUsernames.join(',')}`),
+        serverUrl, tokenSource, 'GET', `/activities/ranked?with=${withUsernames.join(',')}`),
     duel: (winner: string, loser: string) =>
-      call<{ ok: boolean }>(serverUrl, token, 'POST', '/duels', { winner, loser }),
+      call<{ ok: boolean }>(serverUrl, tokenSource, 'POST', '/duels', { winner, loser }),
     createHangout: (b: {
       activity: string; date: string; place: string; friendUsernames: string[];
       stakeUnits?: string;
     }) =>
-      call<{ hangout: Hangout }>(serverUrl, token, 'POST', '/hangouts', b),
-    hangouts: () => call<{ hangouts: Hangout[] }>(serverUrl, token, 'GET', '/hangouts'),
-    hangout: (id: number) => call<{ hangout: Hangout }>(serverUrl, token, 'GET', `/hangouts/${id}`),
+      call<{ hangout: Hangout }>(serverUrl, tokenSource, 'POST', '/hangouts', b),
+    hangouts: () => call<{ hangouts: Hangout[] }>(serverUrl, tokenSource, 'GET', '/hangouts'),
+    hangout: (id: number) => call<{ hangout: Hangout }>(serverUrl, tokenSource, 'GET', `/hangouts/${id}`),
     stakeHangout: (id: number) =>
-      call<{ hangout: Hangout }>(serverUrl, token, 'POST', `/hangouts/${id}/stake`),
+      call<{ hangout: Hangout }>(serverUrl, tokenSource, 'POST', `/hangouts/${id}/stake`),
     settleHangout: (id: number) =>
-      call<{ hangout: Hangout }>(serverUrl, token, 'POST', `/hangouts/${id}/settle`),
-    wallet: () => call<Wallet>(serverUrl, token, 'GET', '/wallet'),
+      call<{ hangout: Hangout }>(serverUrl, tokenSource, 'POST', `/hangouts/${id}/settle`),
+    wallet: () => call<Wallet>(serverUrl, tokenSource, 'GET', '/wallet'),
     addFunds: () =>
       call<{ treasuryAddress?: string; depositAddresses?: unknown }>(
-        serverUrl, token, 'POST', '/wallet/add-funds'),
+        serverUrl, tokenSource, 'POST', '/wallet/add-funds'),
     refreshDeposits: () =>
-      call<{ creditedUnits?: string; balanceUnits?: string }>(serverUrl, token, 'POST', '/wallet/refresh'),
-    withdraw: (amountUnits: string, destination: {
-      chain_type: string; chain_id: string; token_address: string; recipient_address: string;
-    }) => call<{ ok: boolean; status?: string; balanceUnits?: string }>(
-      serverUrl, token, 'POST', '/wallet/withdraw', { amountUnits, destination }),
+      call<{ creditedUnits?: string; balanceUnits?: string }>(serverUrl, tokenSource, 'POST', '/wallet/refresh'),
+    withdraw: (amountUnits: string, destination: WithdrawalDestination, idempotencyKey: string) =>
+      call<WithdrawalResult>(
+        serverUrl,
+        tokenSource,
+        'POST',
+        '/wallet/withdraw',
+        { amountUnits, destination },
+        { 'Idempotency-Key': idempotencyKey },
+      ),
     uploadPhoto: async (id: number, uri: string) => {
       let res;
       try {
+        const token = await resolveAccessToken(tokenSource);
         res = await uploadAsync(`${serverUrl}/hangouts/${id}/photo`, uri, {
           httpMethod: 'POST',
           uploadType: FileSystemUploadType.MULTIPART,
@@ -126,16 +154,16 @@ export function makeApi(serverUrl: string, token: string | null) {
       return JSON.parse(res.body) as { hangout: Hangout };
     },
     nfcToken: (id: number) =>
-      call<{ payload: string }>(serverUrl, token, 'GET', `/hangouts/${id}/nfc-token`),
+      call<{ payload: string }>(serverUrl, tokenSource, 'GET', `/hangouts/${id}/nfc-token`),
     confirm: (id: number, username: string, nfcToken: string) =>
       call<{ hangout: Hangout; vibeGain: number; acornGain: number; bonusReason: string | null }>(
-        serverUrl, token, 'POST', `/hangouts/${id}/confirm`, { username, token: nfcToken }),
-    memories: () => call<{ memories: Hangout[] }>(serverUrl, token, 'GET', '/memories'),
+        serverUrl, tokenSource, 'POST', `/hangouts/${id}/confirm`, { username, token: nfcToken }),
+    memories: () => call<{ memories: Hangout[] }>(serverUrl, tokenSource, 'GET', '/memories'),
     leaderboard: () =>
       call<{ leaderboard: (PublicUser & { count: number; isMe: boolean })[]; month: string }>(
-        serverUrl, token, 'GET', '/leaderboard'),
-    buyItem: (itemId: string) => call<{ me: Me }>(serverUrl, token, 'POST', '/shop/buy', { itemId }),
-    secretAcorns: () => call<{ me: Me }>(serverUrl, token, 'POST', '/secret/acorns'),
+        serverUrl, tokenSource, 'GET', '/leaderboard'),
+    buyItem: (itemId: string) => call<{ me: Me }>(serverUrl, tokenSource, 'POST', '/shop/buy', { itemId }),
+    secretAcorns: () => call<{ me: Me }>(serverUrl, tokenSource, 'POST', '/secret/acorns'),
   };
 }
 

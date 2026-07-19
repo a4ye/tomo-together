@@ -8,7 +8,8 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.anonymous.friendsthing"
     },
     "android": {
       "adaptiveIcon": {
@@ -33,6 +34,7 @@
       "./plugins/withTomoHce",
       "expo-font",
       "expo-notifications",
+      "expo-secure-store",
       [
         "expo-camera",
         {

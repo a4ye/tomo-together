@@ -1,0 +1,16 @@
+# Copy to terraform.tfvars and fill it locally. terraform.tfvars is ignored.
+
+# Crypto credentials and the Atlas URI are not Terraform inputs. Store them in
+# this existing RBAC-enabled Key Vault under these exact secret names:
+#   mongodb-uri, unifold-secret-key, treasury-account-id,
+#   unifold-publishable-key
+crypto_key_vault_name = "ht6tomoyardkv4831"
+mongodb_db_name       = "ht6_crypto"
+
+# Auth0 API values. The issuer is HTTPS and the audience must match the client.
+auth0_issuer_base_url = "https://your-tenant.eu.auth0.com/"
+auth0_audience        = "https://ht6.icinoxis.net/api"
+
+# Keep true only for the first rollout so valid pre-upgrade sessions survive.
+# Return to false after the legacy-account migration window closes.
+allow_legacy_auth = true
