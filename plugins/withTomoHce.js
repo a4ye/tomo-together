@@ -50,6 +50,10 @@ object TomoHceState {
   // Set every time a reader phone makes radio contact; lets the UI show
   // "phones touched" feedback while waiting for the confirm round-trip.
   @Volatile var tappedAt: Long = 0L
+  // Set only when the payload was actually returned to a reader with SW 9000.
+  // tappedAt without servedAt = contact happened but the SELECT never matched
+  // or no payload was set - that distinction pinpoints where a tap died.
+  @Volatile var servedAt: Long = 0L
 }
 
 /**
@@ -81,6 +85,7 @@ class HceService : HostApduService() {
       }
     }
     val payload = TomoHceState.payload ?: return SW_NOT_FOUND
+    TomoHceState.servedAt = System.currentTimeMillis()
     return payload.toByteArray(Charsets.US_ASCII) + SW_OK
   }
 
@@ -111,12 +116,18 @@ class TomoHceModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   fun clear(promise: Promise) {
     TomoHceState.payload = null
     TomoHceState.tappedAt = 0L
+    TomoHceState.servedAt = 0L
     promise.resolve(null)
   }
 
   @ReactMethod
   fun lastTapAt(promise: Promise) {
     promise.resolve(TomoHceState.tappedAt.toDouble())
+  }
+
+  @ReactMethod
+  fun lastServedAt(promise: Promise) {
+    promise.resolve(TomoHceState.servedAt.toDouble())
   }
 }
 `,

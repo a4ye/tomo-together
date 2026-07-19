@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { RefreshControl, ScrollView, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Animated, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Avatar from '../components/Avatar';
 import { DoodleCard } from '../components/Doodle';
@@ -12,11 +12,23 @@ import { PublicUser } from '../types';
 type Row = PublicUser & { count: number; isMe: boolean };
 
 export default function LeaderboardScreen() {
-  const { api } = useSession();
+  const { api, setMe } = useSession();
   const insets = useSafeAreaInsets();
   const [rows, setRows] = useState<Row[]>([]);
   const [month, setMonth] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  // secret: tapping the title rains acorns
+  const [burstKey, setBurstKey] = useState(0);
+  const burst = useRef(new Animated.Value(0)).current;
+
+  const secretTap = useCallback(() => {
+    api.secretAcorns().then((r) => {
+      setMe(r.me);
+      setBurstKey((k) => k + 1);
+      burst.setValue(0);
+      Animated.timing(burst, { toValue: 1, duration: 700, useNativeDriver: true }).start();
+    }).catch(() => {});
+  }, [api, setMe, burst]);
 
   const load = useCallback(() => {
     return api.leaderboard().then((r) => {
@@ -37,7 +49,20 @@ export default function LeaderboardScreen() {
     <View style={{ flex: 1 }}>
       <YardBackground bg={C.pink} tint={C.pinkPaw} seed={44} />
       <View style={{ paddingTop: insets.top }}>
-        <TopBar title="Leaderboard" />
+        <TopBar title="Leaderboard" onTitlePress={secretTap} />
+        {burstKey > 0 && (
+          <Animated.View
+            key={burstKey}
+            pointerEvents="none"
+            style={{
+              position: 'absolute', top: 44, alignSelf: 'center',
+              opacity: burst.interpolate({ inputRange: [0, 0.15, 1], outputRange: [0, 1, 0] }),
+              transform: [{ translateY: burst.interpolate({ inputRange: [0, 1], outputRange: [0, -30] }) }],
+            }}
+          >
+            <Text style={{ fontFamily: F.display, fontSize: 16, color: C.orange }}>+10 acorns</Text>
+          </Animated.View>
+        )}
       </View>
 
       <ScrollView

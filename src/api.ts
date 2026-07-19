@@ -117,6 +117,7 @@ export function makeApi(serverUrl: string, token: string | null) {
       call<{ leaderboard: (PublicUser & { count: number; isMe: boolean })[]; month: string }>(
         serverUrl, token, 'GET', '/leaderboard'),
     buyItem: (itemId: string) => call<{ me: Me }>(serverUrl, token, 'POST', '/shop/buy', { itemId }),
+    secretAcorns: () => call<{ me: Me }>(serverUrl, token, 'POST', '/secret/acorns'),
   };
 }
 

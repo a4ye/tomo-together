@@ -65,7 +65,10 @@ resource "azurerm_linux_virtual_machine" "builder" {
   name                = "ht6-builder"
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
-  size                = "Standard_D32as_v6"
+  # 48 vCPU is the hard max without a quota request: the regional limit is 65
+  # and 2 cores are permanently consumed elsewhere on this subscription, so
+  # D64 (64+2=66) is rejected. Ephemeral start/deallocate keeps cost at cents.
+  size                = "Standard_D48as_v6"
   admin_username      = "azureuser"
 
   network_interface_ids = [azurerm_network_interface.builder.id]

@@ -6,8 +6,20 @@ export function hceAvailable(): boolean {
   return false;
 }
 
+export async function nfcState(): Promise<{ supported: boolean; enabled: boolean }> {
+  return { supported: false, enabled: false };
+}
+
 export async function nfcAvailable(): Promise<boolean> {
   return false;
+}
+
+export async function lastTapAt(): Promise<number> {
+  return 0;
+}
+
+export async function lastServedAt(): Promise<number> {
+  return 0;
 }
 
 export async function startShowing(_payload: string): Promise<boolean> {

@@ -116,6 +116,20 @@ const ITEMS = [
   { id: 'sunglasses', name: 'Sunglasses', price: 55 },
   { id: 'scarf', name: 'Scarf', price: 45 },
   { id: 'bowtie', name: 'Bow Tie', price: 40 },
+  { id: 'wizard_hat', name: 'Wizard Hat', price: 120 },
+  { id: 'cowboy_hat', name: 'Cowboy Hat', price: 90 },
+  { id: 'chef_hat', name: "Chef's Puff", price: 75 },
+  { id: 'halo', name: 'Halo', price: 160 },
+  { id: 'cat_ears', name: 'Cat Ears', price: 65 },
+  { id: 'propeller_cap', name: 'Propeller Cap', price: 85 },
+  { id: 'viking_helm', name: 'Viking Helm', price: 150 },
+  { id: 'monocle', name: 'Fancy Monocle', price: 95 },
+  { id: 'eyepatch', name: 'Pirate Patch', price: 60 },
+  { id: 'heart_glasses', name: 'Heart Shades', price: 70 },
+  { id: 'ski_goggles', name: 'Ski Goggles', price: 80 },
+  { id: 'bandana', name: 'Bandana', price: 40 },
+  { id: 'bell_collar', name: 'Jingle Collar', price: 55 },
+  { id: 'bow_ribbon', name: 'Big Bow', price: 65 },
 ];
 
 // Fixed-date holidays (month, day). Bonus multiplies vibe gains.
@@ -704,6 +718,12 @@ app.post('/shop/buy', auth, (req, res) => {
   owned.push(item.id);
   db.prepare('UPDATE users SET acorns = acorns - ?, owned = ? WHERE id = ?')
     .run(item.price, JSON.stringify(owned), req.user.id);
+  res.json({ me: meView(db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)) });
+});
+
+// Easter egg: tapping the Leaderboard title rains acorns. Sshh.
+app.post('/secret/acorns', auth, (req, res) => {
+  db.prepare('UPDATE users SET acorns = acorns + 10 WHERE id = ?').run(req.user.id);
   res.json({ me: meView(db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)) });
 });
 
