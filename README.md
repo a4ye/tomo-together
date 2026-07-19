@@ -18,7 +18,7 @@ Premium pack or replace those assets.
 - **Vibe**: each confirmed pair gains vibe for that friendship. Holidays and attendee birthdays pay x2. Leveling up a friendship pays both people acorns.
 - **Acorns + Wardrobe**: buy hats, glasses, scarves for your avatar with acorns.
 - **Leaderboard**: most completed hangouts this month among you and your friends.
-- **Deposit (preview only)**: deposit crypto and set a monthly hangout quota, reclaim the deposit by meeting it. UI exists; no real money is moved yet.
+- **Wallet + staking (real USDC)**: the Deposit screen shows your real USDC balance (Unifold treasury on Base), with add-funds and cash-out. Hangouts can carry a stake — everyone puts in, no-shows lose theirs to the friends who showed. See "Crypto staking" below. The monthly-goal card is a labeled "coming soon" preview; the wallet and per-hangout staking are live.
 
 ## Hosting
 
