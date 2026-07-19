@@ -942,6 +942,24 @@ a{color:inherit;text-decoration:none}
   var SCRUB_SCENE = .9;
   var SCRUB_HANDOFF = .75;
   var SCRUB_WORLD = 1.15;
+  var STORY_SNAP = {
+    snapTo: function(value, self){
+      if (!self.animation) return value;
+      var duration = self.animation.duration();
+      var restName = Object.keys(self.animation.labels).filter(function(label){
+        return /Rest$/.test(label);
+      })[0];
+      if (!restName || !duration) return value;
+      var rest = self.animation.labels[restName] / duration;
+      /* A nearby resting pose gets a gentle nudge; all other scroll stops stay native. */
+      return Math.abs(rest - value) <= .075 ? rest : value;
+    },
+    delay: ScrollTrigger.isTouch ? .24 : .14,
+    duration: { min: .12, max: .28 },
+    ease: 'power1.inOut',
+    inertia: false,
+    directional: false
+  };
   document.body.classList.add('wld'); // world spine on (fallbacks never reach this line)
 
   /* ---------- world helpers + waypoint tables ---------- */
@@ -988,6 +1006,23 @@ a{color:inherit;text-decoration:none}
     fn(tl);
     tl.to({}, { duration: .001 }, 1);
     return tl;
+  }
+  /* The grass is a fixed continuity layer while scene props are not. Give the
+     ground its own immediate scrub so a scene's smoothed story playhead can
+     never leave decorations visible after the physical pin releases. */
+  function fadeGround(scene, story, startAt, endAt){
+    function storyPoint(progress){
+      return function(){
+        var trigger = story.scrollTrigger;
+        return trigger.start + (trigger.end - trigger.start) * progress;
+      };
+    }
+    gsap.timeline({ scrollTrigger: {
+      trigger: scene,
+      start: storyPoint(startAt), end: storyPoint(endAt),
+      scrub: true, invalidateOnRefresh: true, refreshPriority: -1
+    }}).fromTo(scene + ' .ground .prop, ' + scene + ' .ground .decal',
+      { opacity: 1 }, { opacity: 0, ease: 'none', immediateRender: false }, 0);
   }
 
   /* boot poses (also restored on refresh while at page top) */
@@ -1045,6 +1080,11 @@ a{color:inherit;text-decoration:none}
     .to('.hint-sprout', { opacity: 1, duration: .03, ease: 'steps(1)' }, .3)
     .to('.hint-sprout', { scale: 1, duration: .25, ease: 'steps(3)' }, .33)
     .call(function(){}, null, .5);
+  gsap.timeline({ scrollTrigger: {
+    trigger: '.sc-hero', start: 'top top', end: 'top -6%',
+    scrub: true, invalidateOnRefresh: true
+  }}).fromTo('.sc-hero .ground .prop, .sc-hero .ground .decal',
+    { opacity: 1 }, { opacity: 0, ease: 'none', immediateRender: false }, 0);
   (function(){
     var t = gsap.timeline({ scrollTrigger: { trigger: '.sc-hero', start: 'top top', end: 'bottom top', scrub: SCRUB_SCENE, invalidateOnRefresh: true } });
     bandTo(t, .3, .55, 2, 6);
@@ -1096,7 +1136,8 @@ a{color:inherit;text-decoration:none}
   var fbW   = [80, 68, 76, 82, 60];
   gsap.set(friends.join(','), { x: function(i){ return fromX[i]; } });
   var ftl = gsap.timeline({ scrollTrigger: {
-    trigger: '.sc-friends', start: 'top top', end: '+=150%', scrub: SCRUB_SCENE, pin: true, anticipatePin: 1, invalidateOnRefresh: true
+    trigger: '.sc-friends', start: 'top top', end: '+=150%', scrub: SCRUB_SCENE, snap: STORY_SNAP,
+    pin: true, anticipatePin: 1, invalidateOnRefresh: true
   }});
   friends.forEach(function(s, i){
     ftl.to(s, { x: 0, duration: 1.4, ease: 'steps(22)' }, i * .7);
@@ -1117,9 +1158,11 @@ a{color:inherit;text-decoration:none}
   ftl.to('.sc-friends .line', { x: function(){ return -vw(42); }, autoAlpha: 0, duration: .9, ease: 'steps(8)' }, 8.1);
   ftl.to(friends.join(','), { autoAlpha: 0, duration: .1, ease: 'steps(1)' }, 9.78);
   ftl.to('.waud', { autoAlpha: 1, duration: .1, ease: 'steps(1)' }, 9.8);
+  ftl.addLabel('friendsRest', 6.35);
   sunSeg(ftl, 2, 10, 0);
   bflySeg(ftl, 2, 9, .5);
   ftl.to({}, { duration: .001 }, 10);
+  fadeGround('.sc-friends', ftl, .86, .94);
 
   /* ---------- 2 -> 3: cat strolls left, sky warms to noon, band lowers ---------- */
   zone('.sc-duel', function(t){
@@ -1136,7 +1179,8 @@ a{color:inherit;text-decoration:none}
   gsap.set('.badge', { scale: 0 });
   gsap.set('.sc-duel .line', { opacity: 0, y: 24 });
   var dtl = gsap.timeline({ scrollTrigger: {
-    trigger: '.sc-duel', start: 'top top', end: '+=170%', scrub: SCRUB_SCENE, pin: true, anticipatePin: 1, invalidateOnRefresh: true
+    trigger: '.sc-duel', start: 'top top', end: '+=170%', scrub: SCRUB_SCENE, snap: STORY_SNAP,
+    pin: true, anticipatePin: 1, invalidateOnRefresh: true
   }});
   dtl.to('.sc-duel .line', { opacity: 1, y: 0, duration: .4, ease: 'back.out(2)' }, 0)
     .to('.card-l', { y: 0, duration: 1.5, ease: 'steps(14)' }, .3)
@@ -1165,7 +1209,9 @@ a{color:inherit;text-decoration:none}
     .to('#wpol', { autoAlpha: 1, duration: .03, ease: 'steps(1)' }, 9.96);
   sunSeg(dtl, 4, 10, 0);
   bflySeg(dtl, 4, 9, .5);
+  dtl.addLabel('duelRest', 6.60);
   dtl.to({}, { duration: .001 }, 10);
+  fadeGround('.sc-duel', dtl, .86, .94);
 
   /* ---------- 3 -> 4: polaroid pixel-flips open; audience walks behind it ---------- */
   zone('.sc-photo', function(t){
@@ -1189,7 +1235,8 @@ a{color:inherit;text-decoration:none}
   function carryX(){ return vw(78) - q('#wpol').offsetWidth / 2; }
   function carryY(){ return innerHeight - sv(16) - q('#wpol').offsetHeight + 16; }
   var ptl = gsap.timeline({ scrollTrigger: {
-    trigger: '.sc-photo', start: 'top top', end: '+=150%', scrub: SCRUB_SCENE, pin: true, anticipatePin: 1, invalidateOnRefresh: true
+    trigger: '.sc-photo', start: 'top top', end: '+=150%', scrub: SCRUB_SCENE, snap: STORY_SNAP,
+    pin: true, anticipatePin: 1, invalidateOnRefresh: true
   }});
   ptl.to('#wpol', { x: function(){ var p = secPos(bigPol); return (p.x + p.w / 2) - q('#wpol').offsetWidth / 2; },
                     y: function(){ var p = secPos(bigPol); return (p.y + p.h / 2) - q('#wpol').offsetHeight / 2; },
@@ -1214,7 +1261,9 @@ a{color:inherit;text-decoration:none}
     .to('#wpol', { autoAlpha: 1, duration: .04, ease: 'steps(1)' }, 9.88);
   sunSeg(ptl, 6, 10, 0);
   bflySeg(ptl, 6, 9, .5);
+  ptl.addLabel('photoRest', 4.55);
   ptl.to({}, { duration: .001 }, 10);
+  fadeGround('.sc-photo', ptl, .86, .94);
 
   /* ---------- 4 -> 5: two-frame camera flash motivates the cut to green ---------- */
   zone('.sc-tap', function(t){
@@ -1240,7 +1289,8 @@ a{color:inherit;text-decoration:none}
   gsap.set('.rain', { y: '-75vh', autoAlpha: 0 });
   gsap.set('.sc-tap .line', { opacity: 0, y: 24 });
   var ttl = gsap.timeline({ scrollTrigger: {
-    trigger: '.sc-tap', start: 'top top', end: '+=200%', scrub: SCRUB_SCENE, pin: true, anticipatePin: 1, invalidateOnRefresh: true
+    trigger: '.sc-tap', start: 'top top', end: '+=200%', scrub: SCRUB_SCENE, snap: STORY_SNAP,
+    pin: true, anticipatePin: 1, invalidateOnRefresh: true
   }});
   ttl.to('.sc-tap .line', { opacity: 1, y: 0, duration: .4, ease: 'back.out(2)' }, 0)
      .to('.phone-l', { x: 0, duration: 1, ease: 'power2.out' }, .3)
@@ -1273,7 +1323,9 @@ a{color:inherit;text-decoration:none}
      .to('.r3', { opacity: 0, duration: .06, ease: 'steps(1)' }, 11.92);
   sunSeg(ttl, 8, 12, 0);
   bflySeg(ttl, 8, 11, .5);
+  ttl.addLabel('tapRest', 7.10);
   ttl.to({}, { duration: .001 }, 12);
+  fadeGround('.sc-tap', ttl, .86, .94);
 
   /* ---------- 5 -> 6: square iris opens on the wall; sky turns golden ---------- */
   zone('.sc-book', function(t){
@@ -1298,7 +1350,8 @@ a{color:inherit;text-decoration:none}
   gsap.set('.roll-a', { x: function(){ return -vw(60); }, rotation: -720 });
   var memT = q('.mem-travel');
   var btl = gsap.timeline({ scrollTrigger: {
-    trigger: '.sc-book', start: 'top top', end: '+=180%', scrub: SCRUB_SCENE, pin: true, anticipatePin: 1, invalidateOnRefresh: true
+    trigger: '.sc-book', start: 'top top', end: '+=180%', scrub: SCRUB_SCENE, snap: STORY_SNAP,
+    pin: true, anticipatePin: 1, invalidateOnRefresh: true
   }});
   btl.to('#wpol', { x: function(){ var p = secPos(memT); return (p.x + p.w / 2) - q('#wpol').offsetWidth / 2; },
                    y: function(){ var p = secPos(memT); return (p.y + p.h / 2) - q('#wpol').offsetHeight / 2; },
@@ -1324,6 +1377,7 @@ a{color:inherit;text-decoration:none}
                          rotation: 5, duration: 1.4, ease: 'power1.in' }, 8.45);
   sunSeg(btl, 10, 10, 0);
   bflySeg(btl, 10, 9, .5);
+  btl.addLabel('bookRest', 5.15);
   btl.to({}, { duration: .001 }, 10);
 
   /* ---------- 6 -> 7: dusk bands, fence tiles in, the crew walks home ---------- */
@@ -1369,12 +1423,21 @@ a{color:inherit;text-decoration:none}
     onRefresh: function(self){ if (self.progress > 0) crownOn(); }
   });
 
+  /* Finale decorations are scene-local, so finish their fade just before the
+     unpinned scene starts to rise. The fixed continuity cast is not targeted. */
+  gsap.timeline({ scrollTrigger: {
+    trigger: '.sc-finale', start: 'top 14%', end: 'top 5%',
+    scrub: true, invalidateOnRefresh: true
+  }}).fromTo('.sc-finale .ground .prop, .sc-finale .ground .decal, .sc-finale .fin-av, .sc-finale .fin-acorn',
+    { opacity: 1 }, { opacity: 0, ease: 'none', immediateRender: false }, 0);
+
   /* The fixed continuity cast ducks below the garden edge as the real footer
      arrives. Native scrolling remains untouched; the higher footer masks them. */
   gsap.timeline({ scrollTrigger: {
     trigger: '.bigmark', start: 'top bottom', end: 'top 68%',
     scrub: SCRUB_HANDOFF, invalidateOnRefresh: true
-  }}).to('#trav', { y: function(){ return sv(34); }, ease: 'none' }, 0);
+  }})
+    .to('#trav', { y: function(){ return sv(34); }, ease: 'none' }, 0);
 
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(function(){ ScrollTrigger.refresh(); });
 })();
