@@ -9,7 +9,7 @@ import OutlinedText from '../components/OutlinedText';
 import YardBackground from '../components/YardBackground';
 import TopBar from '../components/TopBar';
 import {
-  cancelScan, lastTapAt, nfcState, scanOnce, startShowing, stopShowing,
+  cancelScan, lastServedAt, lastTapAt, nfcState, scanOnce, startShowing, stopShowing,
 } from '../nfc';
 import { useNav } from '../state/nav';
 import { useSession } from '../state/session';
@@ -47,6 +47,7 @@ export default function ConfirmScreen({
   const [hceOn, setHceOn] = useState(false);
   const [nfc, setNfc] = useState({ supported: false, enabled: false });
   const [tapSeen, setTapSeen] = useState(false);
+  const [servedSeen, setServedSeen] = useState(false);
   const [result, setResult] = useState<{ vibeGain: number; acornGain: number; bonusReason: string | null } | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const tapPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -81,8 +82,9 @@ export default function ConfirmScreen({
       const showStart = Date.now();
       if (on) {
         tapPollRef.current = setInterval(async () => {
-          const t = await lastTapAt();
+          const [t, s] = await Promise.all([lastTapAt(), lastServedAt()]);
           if (t > showStart) setTapSeen(true);
+          if (s > showStart) setServedSeen(true);
         }, 1000);
       }
       pollRef.current = setInterval(async () => {
@@ -218,11 +220,15 @@ export default function ConfirmScreen({
               Have {otherName} scan this{hceOn ? ', or touch your phones back to back' : ''}.
               This screen will notice when it works.
             </Text>
-            {tapSeen && (
+            {servedSeen ? (
+              <Text style={{ fontFamily: F.display, fontSize: 13.5, color: C.labelGreen, marginTop: 8, textAlign: 'center' }}>
+                Their phone read your code! Waiting for the confirm to land.
+              </Text>
+            ) : tapSeen ? (
               <Text style={{ fontFamily: F.display, fontSize: 13.5, color: C.labelGreen, marginTop: 8, textAlign: 'center' }}>
                 Phones touched! Waiting for their phone to finish.
               </Text>
-            )}
+            ) : null}
             {!hceOn && nfc.supported && (
               <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.fadedInk, marginTop: 6, textAlign: 'center' }}>
                 Phone tapping is unavailable on this phone, the code still works.

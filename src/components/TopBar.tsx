@@ -6,7 +6,8 @@ import { BTN_CREAM, ICONS, NineSliceBg } from './PixelUI';
 import { useNav } from '../state/nav';
 
 // Screen header: sprite Close button top-left, chunky pixel title.
-export default function TopBar({ title }: { title: string }) {
+// onTitlePress is optional and deliberately undocumented in the UI.
+export default function TopBar({ title, onTitlePress }: { title: string; onTitlePress?: () => void }) {
   const nav = useNav();
   return (
     <View
@@ -37,11 +38,13 @@ export default function TopBar({ title }: { title: string }) {
           </Text>
         </View>
       </Pressable>
-      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 }}>
-        <OutlinedText size={26} color={C.white} outline={C.darkInk} thickness={2.5}>
-          {title}
-        </OutlinedText>
-      </View>
+      <Pressable onPress={onTitlePress} disabled={!onTitlePress}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 }}>
+          <OutlinedText size={26} color={C.white} outline={C.darkInk} thickness={2.5}>
+            {title}
+          </OutlinedText>
+        </View>
+      </Pressable>
       <View style={{ width: 60 }} />
     </View>
   );
