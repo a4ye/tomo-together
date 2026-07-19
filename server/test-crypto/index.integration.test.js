@@ -30,6 +30,7 @@ class CryptoUnavailableError extends CryptoError {
 const state = {
   ready: true,
   event: null,
+  createEventOpts: null,
   rsvpCalls: 0,
   checkinCalls: [],
   withdrawCalls: [],
@@ -49,9 +50,17 @@ const fakeCrypto = {
   ensureUser: async () => {
     if (!state.ready) throw new CryptoUnavailableError();
   },
-  createEvent: async (_host, _title, stakeUnits) => {
+  createEvent: async (_host, _title, stakeUnits, opts = {}) => {
     if (!state.ready) throw new CryptoUnavailableError();
-    state.event = { id: 'event-1', status: 'open', stakeUnits, rsvps: [] };
+    state.createEventOpts = opts;
+    // Mirror the custody service: treasury-funded event bonuses are gated off,
+    // so any stake multiplier above 1x is rejected outright.
+    if (opts.multiplierBps != null && opts.multiplierBps > 10000) {
+      throw new CryptoError(403, 'treasury-funded event bonuses are disabled in production');
+    }
+    state.event = {
+      id: 'event-1', status: 'open', stakeUnits, multiplierBps: opts.multiplierBps, rsvps: [],
+    };
     return state.event;
   },
   getEvent: async () => {
@@ -296,4 +305,79 @@ test('money routes preserve intent, repair retries, and mirror settlement atomic
   });
   assert.equal(conflict.status, 409);
   assert.equal(conflict.json.error, 'crypto_conflict');
+});
+
+// A holiday/birthday doubles acorns and vibe, never cashable USDC: the stake
+// multiplier is clamped to 1x so payouts stay backed by real deposits and
+// redistributed forfeits, and the custody treasury-bonus gate never trips.
+test('a bonus-day staked hangout stakes at 1x USDC while acorns keep the 2x', async () => {
+  const carol = await register('carol');
+  const dave = await register('dave');
+  assert.equal((await request('/friends/request', {
+    method: 'POST', token: carol, body: { username: 'dave' },
+  })).status, 200);
+  assert.equal((await request('/friends/accept', {
+    method: 'POST', token: dave, body: { username: 'carol' },
+  })).status, 200);
+
+  // The most recent Valentine's Day already in the past: a fixed-date holiday,
+  // so bonusFor() reports mult 2 while the hangout is still endable.
+  const today = new Date();
+  let valentines = new Date(today.getFullYear(), 1, 14, 12, 0, 0);
+  if (valentines.getTime() >= today.getTime()) {
+    valentines = new Date(today.getFullYear() - 1, 1, 14, 12, 0, 0);
+  }
+
+  state.event = null;
+  state.createEventOpts = null;
+  state.rsvpCalls = 0;
+  state.checkinCalls = [];
+  state.settlementMode = 'valid';
+
+  const created = await request('/hangouts', {
+    method: 'POST', token: carol, body: {
+      activity: 'ramen',
+      date: valentines.toISOString(),
+      place: 'Holiday cafe',
+      friendUsernames: ['dave'],
+      stakeUnits: '2000000',
+    },
+  });
+  // Creation succeeds: the fake custody service, like the real one, throws for
+  // any multiplierBps above 10000, and the clamp keeps us at exactly 1x.
+  assert.equal(created.status, 200);
+  const hangoutId = created.json.hangout.id;
+  assert.equal(state.createEventOpts.multiplierBps, 10000);
+  // The 2x is still stored locally; it drives acorns/vibe and the UI label.
+  const stored = db.prepare('SELECT bonus_mult, bonus_reason FROM hangouts WHERE id = ?').get(hangoutId);
+  assert.equal(stored.bonus_mult, 2);
+  assert.equal(stored.bonus_reason, 'Valentines');
+
+  assert.equal((await request(`/hangouts/${hangoutId}/stake`, { method: 'POST', token: carol })).status, 200);
+  assert.equal((await request(`/hangouts/${hangoutId}/stake`, { method: 'POST', token: dave })).status, 200);
+
+  // The confirmation still pays the doubled vibe on a bonus day.
+  const tokenResponse = await request(`/hangouts/${hangoutId}/nfc-token`, { token: dave });
+  const [, , , nfcToken] = tokenResponse.json.payload.split('|');
+  const confirmed = await request(`/hangouts/${hangoutId}/confirm`, {
+    method: 'POST', token: carol, body: { username: 'dave', token: nfcToken },
+  });
+  assert.equal(confirmed.status, 200);
+  assert.equal(confirmed.json.vibeGain, 30, 'vibe per confirm is 15, doubled on a bonus day');
+  assert.equal(confirmed.json.bonusReason, 'Valentines');
+
+  const photoForm = new FormData();
+  photoForm.append('photo', new Blob(['proof'], { type: 'image/jpeg' }), 'proof.jpg');
+  assert.equal((await request(`/hangouts/${hangoutId}/photo`, {
+    method: 'POST', token: carol, body: photoForm,
+  })).status, 200);
+
+  // Settlement accepts the mirrored 1x multiplier and pays out exactly the
+  // stake plus redistributed forfeits (none here) — no treasury-minted bonus.
+  const settled = await request(`/hangouts/${hangoutId}/end`, { method: 'POST', token: carol });
+  assert.equal(settled.status, 200);
+  assert.equal(settled.json.hangout.stake.settled, true);
+  const payouts = db.prepare(
+    'SELECT payout_units FROM hangout_settlements WHERE hangout_id = ?').all(hangoutId);
+  assert.deepEqual(payouts.map((row) => row.payout_units), ['2000000', '2000000']);
 });

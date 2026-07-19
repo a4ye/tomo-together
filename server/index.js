@@ -1033,7 +1033,10 @@ app.post('/hangouts', auth, asyncRoute(async (req, res) => {
     }
     try {
       await cryptoApi.ensureUser(req.user.username);
-      const bps = Math.min(15000, Math.max(10000, Math.round(bonus.mult * 10000)));
+      // Cashable USDC is backed only by real deposits + redistributed stakes,
+      // so the stake multiplier is always 1x. The holiday/birthday bonus.mult
+      // applies to acorns/vibe only (see the vibeGain path on confirm).
+      const bps = 10000;
       const ev = await cryptoApi.createEvent(req.user.username, act.label, stakeUnits, { multiplierBps: bps, startsAt: date });
       if (!ev || typeof ev.id !== 'string' || ev.id.length < 1) {
         throw new cryptoApi.CryptoError(502, 'Crypto service returned an invalid event.', 'crypto_upstream_invalid');
@@ -1142,10 +1145,9 @@ async function settleStakeAndMirror(h, attendeeIds, { complete = false } = {}) {
   ) {
     throw invalidCryptoUpstream('Crypto service returned an invalid event.');
   }
-  const expectedMultiplierBps = Math.min(
-    15_000,
-    Math.max(10_000, Math.round(current.bonus_mult * 10_000)),
-  );
+  // Events are always created at 1x: bonus_mult boosts acorns/vibe only, never
+  // cashable USDC, so the payout bonus term below is always zero.
+  const expectedMultiplierBps = 10_000;
   if (remoteEvent.multiplierBps != null && remoteEvent.multiplierBps !== expectedMultiplierBps) {
     throw invalidCryptoUpstream('Crypto event multiplier does not match this hangout.');
   }
