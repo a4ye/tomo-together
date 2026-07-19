@@ -12,6 +12,7 @@ import { C } from './src/theme';
 import { Route } from './src/types';
 
 import DepositScreen from './src/screens/DepositScreen';
+import FriendProfileScreen from './src/screens/FriendProfileScreen';
 import FriendsScreen from './src/screens/FriendsScreen';
 import HangoutDetailScreen from './src/screens/HangoutDetailScreen';
 import HangoutsScreen from './src/screens/HangoutsScreen';
@@ -29,6 +30,7 @@ function Screen({ route }: { route: Route }) {
   switch (route.name) {
     case 'yard': return <YardScreen />;
     case 'friends': return <FriendsScreen />;
+    case 'friendProfile': return <FriendProfileScreen username={route.username} />;
     case 'hangouts': return <HangoutsScreen />;
     case 'newHangout': return <NewHangoutScreen />;
     case 'hangoutDetail': return <HangoutDetailScreen hangoutId={route.hangoutId} />;

@@ -146,7 +146,7 @@ export default function YardScreen() {
               friend={s.friend}
               size={s.size}
               delay={s.delay}
-              onPress={() => nav.push({ name: 'friends' })}
+              onPress={() => nav.push({ name: 'friendProfile', username: s.friend.username })}
             />
           </View>
         ))
