@@ -22,6 +22,36 @@ const TIME_CHOICES = [
   { label: 'Night', hour: 21 },
 ];
 
+// 24h hour + minute -> "6:05 PM"
+function fmtClock(hour: number, minute: number): string {
+  const h12 = hour % 12 === 0 ? 12 : hour % 12;
+  const ampm = hour < 12 ? 'AM' : 'PM';
+  return `${h12}:${String(minute).padStart(2, '0')} ${ampm}`;
+}
+
+// Small up/down control for the custom time picker.
+function Stepper({ label, onUp, onDown }: { label: string; onUp: () => void; onDown: () => void }) {
+  const btn = {
+    backgroundColor: C.white, borderWidth: 2.5, borderColor: '#C89A62', borderRadius: 6,
+    width: 40, height: 34, alignItems: 'center' as const, justifyContent: 'center' as const,
+  };
+  return (
+    <View style={{ alignItems: 'center' }}>
+      <Pressable onPress={onUp}>
+        <View style={btn}>
+          <Text style={{ fontFamily: F.display, fontSize: 18, color: C.brown }}>+</Text>
+        </View>
+      </Pressable>
+      <Text style={{ fontFamily: F.body, fontSize: 11, color: C.fadedInk, marginVertical: 2 }}>{label}</Text>
+      <Pressable onPress={onDown}>
+        <View style={btn}>
+          <Text style={{ fontFamily: F.display, fontSize: 18, color: C.brown }}>-</Text>
+        </View>
+      </Pressable>
+    </View>
+  );
+}
+
 export default function NewHangoutScreen({ preselect }: { preselect?: string }) {
   const { api } = useSession();
   const nav = useNav();
@@ -39,8 +69,10 @@ export default function NewHangoutScreen({ preselect }: { preselect?: string }) 
   const [pickCount, setPickCount] = useState(0);
 
   // details state
+  const [timeMode, setTimeMode] = useState<'now' | 'preset' | 'custom'>('preset');
   const [daysAhead, setDaysAhead] = useState(1);
   const [hour, setHour] = useState(18);
+  const [minute, setMinute] = useState(0);
   const [place, setPlace] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -81,12 +113,15 @@ export default function NewHangoutScreen({ preselect }: { preselect?: string }) 
     if (nextCount >= TOTAL_PICKS || queue.length <= 1) setStep('details');
   };
 
+  // For "now" the preview just reflects the current minute; the exact instant
+  // is re-read at create() so the hangout starts (and unlocks) immediately.
   const date = useMemo(() => {
+    if (timeMode === 'now') return new Date();
     const d = new Date();
     d.setDate(d.getDate() + daysAhead);
-    d.setHours(hour, 0, 0, 0);
+    d.setHours(hour, minute, 0, 0);
     return d;
-  }, [daysAhead, hour]);
+  }, [timeMode, daysAhead, hour, minute]);
 
   const attendees = friends.filter((f) => picked.includes(f.username));
   const bonus = bonusPreview(date, holidays, attendees);
@@ -96,9 +131,10 @@ export default function NewHangoutScreen({ preselect }: { preselect?: string }) 
     setBusy(true);
     setError(null);
     try {
+      const when = timeMode === 'now' ? new Date() : date;
       const { hangout } = await api.createHangout({
         activity: champion.id,
-        date: date.toISOString(),
+        date: when.toISOString(),
         place: place.trim() || 'Somewhere',
         friendUsernames: picked,
       });
@@ -227,38 +263,102 @@ export default function NewHangoutScreen({ preselect }: { preselect?: string }) 
             <View style={{ marginTop: 14, marginBottom: 6 }}>
               <OutlinedText size={20} color={C.labelBlue} outline={C.white} thickness={2}>When?</OutlinedText>
             </View>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-              {DAY_CHOICES.map((d) => (
-                <Pressable key={d} onPress={() => setDaysAhead(d)}>
+
+            {/* time mode */}
+            <View style={{ flexDirection: 'row' }}>
+              {([
+                ['now', 'Right now'],
+                ['preset', 'Pick a day'],
+                ['custom', 'Custom time'],
+              ] as const).map(([m, label]) => (
+                <Pressable key={m} onPress={() => setTimeMode(m)} style={{ flex: 1 }}>
                   <View
                     style={{
-                      paddingHorizontal: 12, paddingVertical: 7, borderRadius: 6, margin: 3,
-                      backgroundColor: daysAhead === d ? C.yellow : C.white,
-                      borderWidth: 2.5, borderColor: daysAhead === d ? C.brown : '#C89A62',
+                      alignItems: 'center', marginHorizontal: 3, paddingVertical: 8, borderRadius: 6,
+                      backgroundColor: timeMode === m ? C.yellow : C.white,
+                      borderWidth: 2.5, borderColor: timeMode === m ? C.brown : '#C89A62',
                     }}
                   >
-                    <Text style={{ fontFamily: F.display, fontSize: 13, color: C.darkInk }}>
-                      {d === 0 ? 'Today' : d === 1 ? 'Tomorrow' : `In ${d} days`}
+                    <Text style={{ fontFamily: F.display, fontSize: 12.5, color: C.darkInk }}>{label}</Text>
+                  </View>
+                </Pressable>
+              ))}
+            </View>
+
+            {timeMode === 'now' && (
+              <Text style={{ fontFamily: F.body, fontSize: 13.5, color: C.brown, marginTop: 8 }}>
+                Meeting up right now. You can take the photo and confirm as soon as you create it.
+              </Text>
+            )}
+
+            {timeMode !== 'now' && (
+              <>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 8 }}>
+                  {DAY_CHOICES.map((d) => (
+                    <Pressable key={d} onPress={() => setDaysAhead(d)}>
+                      <View
+                        style={{
+                          paddingHorizontal: 12, paddingVertical: 7, borderRadius: 6, margin: 3,
+                          backgroundColor: daysAhead === d ? C.yellow : C.white,
+                          borderWidth: 2.5, borderColor: daysAhead === d ? C.brown : '#C89A62',
+                        }}
+                      >
+                        <Text style={{ fontFamily: F.display, fontSize: 13, color: C.darkInk }}>
+                          {d === 0 ? 'Today' : d === 1 ? 'Tomorrow' : `In ${d} days`}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  ))}
+                </View>
+
+                {timeMode === 'preset' && (
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 4 }}>
+                    {TIME_CHOICES.map((t) => (
+                      <Pressable key={t.hour} onPress={() => { setHour(t.hour); setMinute(0); }}>
+                        <View
+                          style={{
+                            paddingHorizontal: 12, paddingVertical: 7, borderRadius: 6, margin: 3,
+                            backgroundColor: hour === t.hour && minute === 0 ? C.yellow : C.white,
+                            borderWidth: 2.5, borderColor: hour === t.hour && minute === 0 ? C.brown : '#C89A62',
+                          }}
+                        >
+                          <Text style={{ fontFamily: F.display, fontSize: 13, color: C.darkInk }}>{t.label}</Text>
+                        </View>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
+
+                {timeMode === 'custom' && (
+                  <View
+                    style={{
+                      flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                      marginTop: 10,
+                    }}
+                  >
+                    <Stepper
+                      label="hour"
+                      onUp={() => setHour((h) => (h + 1) % 24)}
+                      onDown={() => setHour((h) => (h + 23) % 24)}
+                    />
+                    <Text
+                      style={{
+                        fontFamily: F.display, fontSize: 28, color: C.darkInk,
+                        minWidth: 150, textAlign: 'center',
+                      }}
+                    >
+                      {fmtClock(hour, minute)}
                     </Text>
+                    <Stepper
+                      label="min"
+                      onUp={() => setMinute((m) => (m + 5) % 60)}
+                      onDown={() => setMinute((m) => (m + 55) % 60)}
+                    />
                   </View>
-                </Pressable>
-              ))}
-            </View>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 4 }}>
-              {TIME_CHOICES.map((t) => (
-                <Pressable key={t.hour} onPress={() => setHour(t.hour)}>
-                  <View
-                    style={{
-                      paddingHorizontal: 12, paddingVertical: 7, borderRadius: 6, margin: 3,
-                      backgroundColor: hour === t.hour ? C.yellow : C.white,
-                      borderWidth: 2.5, borderColor: hour === t.hour ? C.brown : '#C89A62',
-                    }}
-                  >
-                    <Text style={{ fontFamily: F.display, fontSize: 13, color: C.darkInk }}>{t.label}</Text>
-                  </View>
-                </Pressable>
-              ))}
-            </View>
+                )}
+              </>
+            )}
+
             {bonus.reason && (
               <Text style={{ fontFamily: F.display, fontSize: 13, color: C.labelGreen, marginTop: 6 }}>
                 {bonus.reason}: vibe x2 for this hangout
@@ -279,10 +379,20 @@ export default function NewHangoutScreen({ preselect }: { preselect?: string }) 
               }}
             />
 
+            <View style={{ alignItems: 'center', marginTop: 14 }}>
+              <Text style={{ fontFamily: F.body, fontSize: 13, color: C.brown, textAlign: 'center' }}>
+                {timeMode === 'now'
+                  ? 'Starting right now'
+                  : date.toLocaleDateString(undefined, {
+                      weekday: 'short', month: 'short', day: 'numeric',
+                    }) + ' at ' + fmtClock(date.getHours(), date.getMinutes())}
+              </Text>
+            </View>
+
             {error && (
-              <Text style={{ fontFamily: F.body, fontSize: 13, color: C.redPin, marginTop: 8 }}>{error}</Text>
+              <Text style={{ fontFamily: F.body, fontSize: 13, color: C.redPin, marginTop: 8, textAlign: 'center' }}>{error}</Text>
             )}
-            <View style={{ marginTop: 16 }}>
+            <View style={{ marginTop: 12 }}>
               <DoodleButton
                 label={busy ? 'Creating' : 'Create hangout'}
                 bg={C.yellow} border={C.brown} seed={12} disabled={busy}
