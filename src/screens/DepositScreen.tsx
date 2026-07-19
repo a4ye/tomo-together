@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import QRCode from 'react-native-qrcode-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DoodleButton, DoodleCard } from '../components/Doodle';
@@ -64,6 +65,8 @@ export default function DepositScreen() {
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [depositAddr, setDepositAddr] = useState<string | null>(null);
   const [cashOutAddr, setCashOutAddr] = useState('');
+  const [permission, requestPermission] = useCameraPermissions();
+  const [scanning, setScanning] = useState(false);
   const [walletBusy, setWalletBusy] = useState(false);
   const [walletMsg, setWalletMsg] = useState<string | null>(null);
   const [withdrawalIntent, setWithdrawalIntent] = useState<WithdrawalIntent | null>(null);
@@ -129,6 +132,26 @@ export default function DepositScreen() {
     } catch (e) {
       setWalletMsg(e instanceof Error ? e.message : 'Could not refresh');
     } finally { setWalletBusy(false); }
+  };
+
+  const openScanner = async () => {
+    setWalletMsg(null);
+    if (!permission?.granted) {
+      const r = await requestPermission();
+      if (!r.granted) { setWalletMsg('Camera access is needed to scan a wallet QR code.'); return; }
+    }
+    setScanning(true);
+  };
+
+  // A wallet's receive QR may be a bare 0x address or an EIP-681 URI
+  // (ethereum:0x…@8453). Pull the address out; ignore any read without one so a
+  // stray QR doesn't close the scanner.
+  const onScan = (data: string) => {
+    const match = data.match(/0x[0-9a-fA-F]{40}/);
+    if (!match) return;
+    setScanning(false);
+    setCashOutAddr(match[0]);
+    setWalletMsg('Scanned wallet address ✓');
   };
 
   const cashOut = async () => {
@@ -268,6 +291,31 @@ export default function DepositScreen() {
                   paddingHorizontal: 12, paddingVertical: 9, fontFamily: F.body, fontSize: 13, color: C.darkInk,
                 }}
               />
+              {!withdrawalIntent && !scanning && (
+                <View style={{ marginTop: 8 }}>
+                  <DoodleButton label="Scan a wallet QR" size={12} seed={7} disabled={walletBusy} onPress={openScanner} />
+                </View>
+              )}
+              {scanning && (
+                <View style={{ marginTop: 8, alignItems: 'center' }}>
+                  <View style={{ width: '80%', aspectRatio: 1, borderWidth: 3, borderColor: C.darkInk, borderRadius: 6, overflow: 'hidden', backgroundColor: '#EFE8D8' }}>
+                    {permission?.granted && (
+                      <CameraView
+                        facing="back"
+                        style={{ width: '100%', height: '100%' }}
+                        barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+                        onBarcodeScanned={({ data }) => onScan(data)}
+                      />
+                    )}
+                  </View>
+                  <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.brown, marginTop: 6, textAlign: 'center' }}>
+                    Point the camera at your wallet's receive QR.
+                  </Text>
+                  <View style={{ marginTop: 6 }}>
+                    <DoodleButton label="Cancel" size={12} seed={11} onPress={() => setScanning(false)} />
+                  </View>
+                </View>
+              )}
               <View style={{ marginTop: 8 }}>
                 <DoodleButton
                   label={walletBusy
