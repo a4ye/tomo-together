@@ -1269,24 +1269,6 @@ async function settleStakeAndMirror(h, attendeeIds, { complete = false } = {}) {
   return db.prepare('SELECT * FROM hangouts WHERE id = ?').get(current.id);
 }
 
-// Settle the pool: staked no-shows forfeit to staked attendees. This endpoint
-// remains independently retryable and does not otherwise complete the hangout.
-app.post('/hangouts/:id/settle', auth, asyncRoute(async (req, res) => {
-  const h = db.prepare('SELECT * FROM hangouts WHERE id = ?').get(req.params.id);
-  if (!h || !memberIds(h.id).includes(req.user.id))
-    return res.status(404).json({ error: 'Hangout not found' });
-  if (!h.crypto_event_id) return res.status(400).json({ error: 'This hangout has no stake' });
-  if (h.settled_at) return res.json({ hangout: hangoutView(h, req.user.id) });
-  if (new Date(h.date).getTime() > Date.now())
-    return res.status(400).json({ error: 'Cannot settle before the hangout starts' });
-  try {
-    const settled = await settleStakeAndMirror(h, attendeeIdSet(h, memberIds(h.id)));
-    return res.json({ hangout: hangoutView(settled, req.user.id) });
-  } catch (error) {
-    return sendCryptoError(res, error);
-  }
-}));
-
 app.get('/hangouts', auth, (req, res) => {
   const rows = db.prepare(`SELECT h.* FROM hangouts h
     JOIN hangout_members m ON m.hangout_id = h.id

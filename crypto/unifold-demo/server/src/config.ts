@@ -52,6 +52,14 @@ export const TREASURY_SOURCE_CHAIN_ID = treasurySourceChainId();
 // POST /webhooks/unifold verifies (HMAC-SHA256) and processes real-time events.
 export const WEBHOOK_SECRET = process.env.UNIFOLD_WEBHOOK_SECRET ?? '';
 
+// Non-fatal: the server still runs without a webhook secret, but every Unifold
+// webhook is rejected, so make sure operators notice (quiet in tests).
+if (!WEBHOOK_SECRET && process.env.NODE_ENV !== 'test') {
+  console.warn(
+    '[config] UNIFOLD_WEBHOOK_SECRET is not set — Unifold webhooks will be rejected; deposit credits and withdrawal refunds will rely on polling only. Set it (whsec_...) for the demo.',
+  );
+}
+
 // Money constants (USDC has 6 decimals).
 export const GRANT_USDC_UNITS = '4000000'; // 4 USDC
 

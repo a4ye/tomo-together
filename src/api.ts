@@ -115,8 +115,6 @@ export function makeApi(serverUrl: string, tokenSource: AccessTokenSource) {
     hangout: (id: number) => call<{ hangout: Hangout }>(serverUrl, tokenSource, 'GET', `/hangouts/${id}`),
     stakeHangout: (id: number) =>
       call<{ hangout: Hangout }>(serverUrl, tokenSource, 'POST', `/hangouts/${id}/stake`),
-    settleHangout: (id: number) =>
-      call<{ hangout: Hangout }>(serverUrl, tokenSource, 'POST', `/hangouts/${id}/settle`),
     endHangout: (id: number) =>
       call<{ hangout: Hangout }>(serverUrl, tokenSource, 'POST', `/hangouts/${id}/end`),
     wallet: () => call<Wallet>(serverUrl, tokenSource, 'GET', '/wallet'),

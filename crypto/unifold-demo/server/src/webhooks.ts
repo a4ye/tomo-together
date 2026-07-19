@@ -10,6 +10,7 @@ import {
   USDC_BASE_TOKEN_ADDRESS,
 } from './config.js';
 import { adjust } from './adjust.js';
+import { depositReference } from './deposits.js';
 import { getStore } from './runtimeStore.js';
 
 export interface WebhookHandlingResult {
@@ -70,7 +71,14 @@ export async function handleUnifoldWebhook(
     case 'deposit.direct_execution.completed': {
       const execution = event.data.object;
       const details = execution.details;
-      const amount = details?.destination_amount ?? execution.amount;
+      // Credit only the canonical destination amount — never `execution.amount`,
+      // which is a different field and could disagree with what the poll path
+      // credits. The SDK leaves `details.destination_amount` undocumented as to
+      // units (no `_base_unit` suffix), so the integer-only guard below stays
+      // load-bearing: a decimal-formatted value is rejected here and the
+      // deposit is later credited by the poll from the documented
+      // `destination_amount_base_unit` field instead.
+      const amount = details?.destination_amount;
       const owned =
         eventBelongsToConfiguredMode(event) &&
         execution.status === 'completed' &&
@@ -103,7 +111,7 @@ export async function handleUnifoldWebhook(
       await adjust(
         execution.external_user_id,
         amount,
-        `deposit:${execution.id}`,
+        depositReference(execution.id),
       );
       return { type: event.type, handled: true };
     }

@@ -43,19 +43,6 @@ export default function HangoutDetailScreen({ hangoutId }: { hangoutId: number }
     }
   }, [api, hangoutId]);
 
-  const doSettle = useCallback(async () => {
-    setBusy(true);
-    setStakeMsg(null);
-    try {
-      const r = await api.settleHangout(hangoutId);
-      setH(r.hangout);
-    } catch (e) {
-      setStakeMsg(e instanceof Error ? e.message : 'Could not settle');
-    } finally {
-      setBusy(false);
-    }
-  }, [api, hangoutId]);
-
   const doEnd = useCallback(async () => {
     setBusy(true);
     setEndMsg(null);
@@ -202,15 +189,6 @@ export default function HangoutDetailScreen({ hangoutId }: { hangoutId: number }
                     label={busy ? 'Staking' : `Stake ${fmtUsd(h.stake.stakeUnits)} to join`}
                     bg={C.yellow} border={C.brown} seed={8} disabled={busy}
                     onPress={doStake}
-                  />
-                </View>
-              )}
-              {!h.stake.settled && started && (
-                <View style={{ marginTop: 10 }}>
-                  <DoodleButton
-                    label={busy ? 'Settling' : 'Settle the pool'}
-                    seed={10} disabled={busy}
-                    onPress={doSettle}
                   />
                 </View>
               )}

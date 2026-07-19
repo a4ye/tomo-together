@@ -16,6 +16,13 @@ function sameAddress(left: string, right: string): boolean {
   return left.toLowerCase() === right.toLowerCase();
 }
 
+// Idempotency reference for crediting a deposit execution. The webhook and
+// poll paths both build their reference here so they are byte-identical for
+// the same execution id — a deposit observed by both can never double-credit.
+export function depositReference(executionId: string): string {
+  return `deposit:${executionId}`;
+}
+
 function ownedDeposit(
   execution: DirectExecution,
   treasuryAddress: string,
@@ -62,7 +69,7 @@ export async function refreshDeposits(externalUserId: string): Promise<{
       const result = await adjust(
         externalUserId,
         amount,
-        `deposit:${execution.id}`,
+        depositReference(execution.id),
       );
       if (!result.alreadyApplied && BigInt(result.appliedUnits) > 0n) {
         creditedTotal += BigInt(result.appliedUnits);

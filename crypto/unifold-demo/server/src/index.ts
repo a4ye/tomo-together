@@ -99,8 +99,12 @@ app.post(
   }),
 );
 
-// Reject unauthenticated business requests before parsing their bodies. The
-// provider webhook above is authenticated by its HMAC signature instead.
+// SECURITY: every route registered below this line — including the treasury-
+// moving /adjust and /withdraw — requires the shared CRYPTO_SERVICE_TOKEN
+// bearer (constant-time check in auth.ts). Only the health/readiness probes
+// above stay public, and the provider webhook above is authenticated by its
+// HMAC signature instead. Reject unauthenticated business requests before
+// parsing their bodies.
 app.use(requireServiceToken);
 app.use(express.json());
 
@@ -530,6 +534,11 @@ function closeHttpServer(server: Server, timeoutMs: number): Promise<void> {
  * Initialize the single process-wide store before accepting any traffic.
  * Mongo connection or index failures reject this function and leave the port
  * unbound, which is the intended production fail-closed behavior.
+ *
+ * SECURITY: this process holds treasury custody and must NOT be exposed to the
+ * public internet — deploy it so it is reachable only by the trusted app
+ * server on a private network. The CRYPTO_SERVICE_TOKEN bearer required on all
+ * business routes is defense in depth, not a substitute for that isolation.
  */
 export async function startServer(options: StartServerOptions = {}): Promise<RunningCryptoServer> {
   const port = options.port ?? PORT;

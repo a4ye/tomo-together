@@ -144,11 +144,12 @@ after(async () => {
 async function request(route, { method = 'GET', token, body, headers = {} } = {}) {
   const requestHeaders = { ...headers };
   if (token) requestHeaders.Authorization = `Bearer ${token}`;
-  if (body !== undefined) requestHeaders['Content-Type'] = 'application/json';
+  const isForm = body instanceof FormData;
+  if (body !== undefined && !isForm) requestHeaders['Content-Type'] = 'application/json';
   const response = await fetch(`${baseUrl}${route}`, {
     method,
     headers: requestHeaders,
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined || isForm ? body : JSON.stringify(body),
   });
   return { status: response.status, json: await response.json() };
 }
@@ -235,8 +236,18 @@ test('money routes preserve intent, repair retries, and mirror settlement atomic
   assert.equal(confirmedAgain.status, 200);
   assert.deepEqual(state.checkinCalls, ['alice', 'bob', 'alice', 'bob']);
 
+  // Settlement happens only through /end, which demands the photo as proof.
+  const noProof = await request(`/hangouts/${hangoutId}/end`, { method: 'POST', token: alice });
+  assert.equal(noProof.status, 400);
+  const photoForm = new FormData();
+  photoForm.append('photo', new Blob(['proof'], { type: 'image/jpeg' }), 'proof.jpg');
+  const photographed = await request(`/hangouts/${hangoutId}/photo`, {
+    method: 'POST', token: alice, body: photoForm,
+  });
+  assert.equal(photographed.status, 200);
+
   state.settlementMode = 'invalid';
-  const invalidSettlement = await request(`/hangouts/${hangoutId}/settle`, { method: 'POST', token: alice });
+  const invalidSettlement = await request(`/hangouts/${hangoutId}/end`, { method: 'POST', token: alice });
   assert.equal(invalidSettlement.status, 502);
   assert.equal(db.prepare('SELECT settled_at FROM hangouts WHERE id = ?').get(hangoutId).settled_at, null);
   assert.equal(
@@ -245,14 +256,15 @@ test('money routes preserve intent, repair retries, and mirror settlement atomic
   );
 
   state.settlementMode = 'valid';
-  const settled = await request(`/hangouts/${hangoutId}/settle`, { method: 'POST', token: alice });
+  const settled = await request(`/hangouts/${hangoutId}/end`, { method: 'POST', token: alice });
   assert.equal(settled.status, 200);
   assert.equal(settled.json.hangout.stake.settled, true);
+  assert.ok(settled.json.hangout.completedAt);
   assert.equal(
     db.prepare('SELECT COUNT(*) count FROM hangout_settlements WHERE hangout_id = ?').get(hangoutId).count,
     2,
   );
-  const settledAgain = await request(`/hangouts/${hangoutId}/settle`, { method: 'POST', token: alice });
+  const settledAgain = await request(`/hangouts/${hangoutId}/end`, { method: 'POST', token: alice });
   assert.equal(settledAgain.status, 200);
 
   const missingKey = await request('/wallet/withdraw', {
