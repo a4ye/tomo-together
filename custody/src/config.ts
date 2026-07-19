@@ -11,7 +11,15 @@ function required(name: string, placeholders: string[] = []): string {
   return v.trim();
 }
 
-export const PORT = Number(process.env.PORT ?? '8787');
+function parsePort(raw: string | undefined): number {
+  const value = Number(raw ?? '8787');
+  if (!Number.isInteger(value) || value <= 0 || value > 65535) {
+    throw new Error(`PORT must be an integer 1-65535; got ${JSON.stringify(raw)}`);
+  }
+  return value;
+}
+
+export const PORT = parsePort(process.env.PORT);
 
 export const UNIFOLD_SECRET_KEY = required('UNIFOLD_SECRET_KEY', [
   'sk_live_replace_me',
@@ -85,9 +93,9 @@ function unitsSetting(name: string, fallback: string, positive = false): string 
 export const CREDIT_LIMIT_UNITS = unitsSetting('CREDIT_LIMIT_UNITS', '0'); // floor at 0 (no debt)
 export const CASHOUT_THRESHOLD_UNITS = unitsSetting(
   'CASHOUT_THRESHOLD_UNITS',
-  '20000000',
+  '1000000',
   true,
-); // cash out once you're owed $20+
+); // cash out once you're owed $1+ (lowered from $20 for the demo; override via env)
 // Validation and the wallet's ready flag intentionally share one configurable
 // product minimum. Unifold's lower network floor does not bypass our batching.
 export const MIN_WITHDRAW_UNITS = CASHOUT_THRESHOLD_UNITS;

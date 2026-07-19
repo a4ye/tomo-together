@@ -71,17 +71,37 @@ export async function handleUnifoldWebhook(
     case 'deposit.direct_execution.completed': {
       const execution = event.data.object;
       const details = execution.details;
-      // Credit only the canonical destination amount — never `execution.amount`,
-      // which is a different field and could disagree with what the poll path
-      // credits. The SDK leaves `details.destination_amount` undocumented as to
-      // units (no `_base_unit` suffix), so the integer-only guard below stays
-      // load-bearing: a decimal-formatted value is rejected here and the
-      // deposit is later credited by the poll from the documented
-      // `destination_amount_base_unit` field instead.
+      // This handler runs only when UNIFOLD_WEBHOOK_SECRET is set (see
+      // verifiedEvent); without it every deposit is credited by the poll path.
+      //
+      // Credit the destination amount in base units — never `execution.amount`,
+      // a separate nullable field that need not agree with what the poll credits.
+      // On the webhook object that amount is `details.destination_amount`, and it
+      // is base units, the SAME magnitude the poll reads from the list API's
+      // documented `destination_amount_base_unit`.
+      //
+      // Units are confirmed from the SDK's typed contracts (docs.unifold.io is
+      // visitor-password gated and could not be read here): across the SDK every
+      // token-amount string is base units and only the `_usd` siblings are
+      // decimals. Cross-evidence — the sibling webhook shape
+      // PaymentIntentEventData.destination_amount is documented "Amount to deliver
+      // in destination-token base units", and the outbound-transfer webhook's
+      // `amount` is compared directly against stored base units below. The webhook
+      // DirectExecutionDetails exposes `destination_amount` (+ `_usd`) but carries
+      // no `_base_unit`-suffixed field, so `destination_amount` is that base-unit
+      // value; crediting it matches the poll exactly.
+      //
+      // The integer/positive guards below stay as a defensive fail-safe: were a
+      // value ever non-integer, it is rejected here and the poll (documented base
+      // units) remains the source of truth rather than a wrong credit landing.
       const amount = details?.destination_amount;
       const owned =
         eventBelongsToConfiguredMode(event) &&
-        execution.status === 'completed' &&
+        // The event type already gates this to a completed deposit; accept the
+        // provider's terminal-success vocabulary ('completed' on the event object,
+        // 'succeeded' in the DirectExecution status enum) so a naming difference
+        // does not silently drop every webhook-credited deposit.
+        (execution.status === 'completed' || execution.status === 'succeeded') &&
         execution.treasury_account_id === TREASURY_ACCOUNT_ID &&
         details?.destination_chain_type === 'ethereum' &&
         details.destination_chain_id === String(CHAIN_ID) &&

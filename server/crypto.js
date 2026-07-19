@@ -169,6 +169,11 @@ async function call(method, path, body, extraHeaders = {}) {
 
   const payload = await response.json().catch(() => ({}));
   if (response.status === 401) {
+    // This latch is intentional (a public probe can't prove a rotated token is
+    // valid), so surface it — otherwise crypto goes permanently dark with no signal.
+    if (readiness !== 'unauthorized') {
+      console.warn('[crypto] custody rejected the service token (401); crypto is disabled until this process restarts with a valid CRYPTO_SERVICE_TOKEN.');
+    }
     recordReadiness('unauthorized', true);
     throw new CryptoUnavailableError();
   }

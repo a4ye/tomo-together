@@ -99,8 +99,18 @@ export default function DepositScreen() {
     setWalletBusy(true); setWalletMsg(null);
     try {
       const r = await api.addFunds();
-      const addr = (r.depositAddresses as { address?: string }[] | undefined)?.[0]?.address
-        || r.treasuryAddress || null;
+      // Unifold returns one deposit address per supported source chain, with no
+      // guaranteed order. The user is sending USDC ON BASE, so pick the EVM
+      // address (chain_type 'ethereum' — the same 0x wallet receives on any EVM
+      // source chain, Base included). is_primary is only the tuple's primary
+      // wallet on SOME source chain (it can be e.g. a Solana address), so it is
+      // not a safe key for a Base send. Never fall back to a non-EVM address or
+      // to treasuryAddress — a Base transfer there would be stranded.
+      const list = r.depositAddresses as
+        { address?: string; chain_type?: string }[] | undefined;
+      const addr =
+        list?.find((a) => a.chain_type === 'ethereum' && typeof a.address === 'string')?.address
+        ?? null;
       setDepositAddr(addr);
     } catch (e) {
       setWalletMsg(e instanceof Error ? e.message : 'Could not get a deposit address');
@@ -142,6 +152,15 @@ export default function DepositScreen() {
         setWithdrawalIntent(intent);
       }
       const result = await api.withdraw(intent.amountUnits, intent.destination, intent.key);
+      // ok:true can still carry a terminal failure — the transfer failed and the
+      // balance was refunded. Never report that as "sent".
+      if (result.ok && (result.status === 'failed' || result.status === 'refunded')) {
+        await AsyncStorage.removeItem(withdrawalStorageKey).catch(() => {});
+        setWithdrawalIntent(null);
+        await loadWallet();
+        setWalletMsg('Cash-out could not be sent — your balance was refunded.');
+        return;
+      }
       if (result.pending || !result.ok) {
         const pendingIntent = { ...intent, state: 'reconciling' as const };
         // The original durable record already has the exact key and payload;
