@@ -92,6 +92,8 @@ export function makeApi(serverUrl: string, token: string | null) {
       call<{ hangout: Hangout }>(serverUrl, token, 'POST', `/hangouts/${id}/stake`),
     settleHangout: (id: number) =>
       call<{ hangout: Hangout }>(serverUrl, token, 'POST', `/hangouts/${id}/settle`),
+    endHangout: (id: number) =>
+      call<{ hangout: Hangout }>(serverUrl, token, 'POST', `/hangouts/${id}/end`),
     wallet: () => call<Wallet>(serverUrl, token, 'GET', '/wallet'),
     addFunds: () =>
       call<{ treasuryAddress?: string; depositAddresses?: unknown }>(

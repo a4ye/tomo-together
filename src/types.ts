@@ -72,6 +72,8 @@ export type HangoutStake = {
   iStaked: boolean;
 };
 
+export type HangoutMember = PublicUser & { attended: boolean };
+
 export type Hangout = {
   id: number;
   activity: string;
@@ -82,9 +84,10 @@ export type Hangout = {
   bonusReason: string | null;
   photoUrl: string | null;
   completedAt: string | null;
-  members: PublicUser[];
+  members: HangoutMember[];
   confirmedPairs: [string, string][];
   pairsTotal: number;
+  canEnd: boolean; // started + has photo + not yet completed
   stake: HangoutStake | null;
 };
 

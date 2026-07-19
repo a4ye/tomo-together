@@ -106,6 +106,7 @@ for (const stmt of [
   `ALTER TABLE hangouts ADD COLUMN stake_units TEXT`,        // USDC base units, null = no stake
   `ALTER TABLE hangouts ADD COLUMN crypto_event_id TEXT`,    // Unifold event id
   `ALTER TABLE hangouts ADD COLUMN settled_at TEXT`,
+  `ALTER TABLE hangouts ADD COLUMN photo_by INTEGER`,        // who took the photo = proof they showed
 ]) {
   try { db.exec(stmt); } catch { /* column exists */ }
 }
@@ -324,11 +325,22 @@ function allPairs(ids) {
   return out;
 }
 
+// Who actually showed up: the photo taker (present to snap it) plus anyone who
+// confirmed (tapped) with someone. Everyone else is a no-show.
+function attendeeIdSet(h, ids) {
+  const set = new Set();
+  if (h.photo_by != null) set.add(h.photo_by);
+  const confirms = db.prepare('SELECT u1, u2 FROM confirms WHERE hangout_id = ?').all(h.id);
+  for (const c of confirms) { set.add(c.u1); set.add(c.u2); }
+  return set;
+}
+
 function hangoutView(h, meId) {
   const ids = memberIds(h.id);
+  const attendees = attendeeIdSet(h, ids);
   const members = ids.map((id) => {
     const u = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
-    return publicUser(u);
+    return { ...publicUser(u), attended: attendees.has(id) };
   });
   const confirms = db.prepare('SELECT * FROM confirms WHERE hangout_id = ?').all(h.id);
   const confirmedPairs = confirms.map((c) => {
@@ -377,6 +389,8 @@ function hangoutView(h, meId) {
     confirmedPairs,
     pairsTotal,
     mine: ids.includes(meId),
+    // can be force-ended once it has started and there's a photo (proof)
+    canEnd: !h.completed_at && !!h.photo && new Date(h.date).getTime() < Date.now(),
     stake,
   };
 }
@@ -789,8 +803,55 @@ app.post('/hangouts/:id/photo', auth, upload.single('photo'), (req, res) => {
   if (!h || !memberIds(h.id).includes(req.user.id))
     return res.status(404).json({ error: 'Hangout not found' });
   if (!req.file) return res.status(400).json({ error: 'No photo attached' });
-  db.prepare('UPDATE hangouts SET photo = ? WHERE id = ?').run(req.file.filename, h.id);
+  db.prepare('UPDATE hangouts SET photo = ?, photo_by = ? WHERE id = ?').run(req.file.filename, req.user.id, h.id);
   maybeComplete(h.id);
+  res.json({ hangout: hangoutView(db.prepare('SELECT * FROM hangouts WHERE id = ?').get(h.id), req.user.id) });
+});
+
+// End the hangout with whoever showed up, even if some pairs never tapped.
+// Requires the hangout to have started and a photo (proof). Attendees are the
+// photo taker + anyone who confirmed; no-shows are the rest. Settles the pool
+// (checking attendees in first) so no-shows' stakes go to the friends who came.
+app.post('/hangouts/:id/end', auth, async (req, res) => {
+  const h = db.prepare('SELECT * FROM hangouts WHERE id = ?').get(req.params.id);
+  if (!h || !memberIds(h.id).includes(req.user.id))
+    return res.status(404).json({ error: 'Hangout not found' });
+  if (h.completed_at) return res.status(400).json({ error: 'Already ended' });
+  if (new Date(h.date).getTime() > Date.now())
+    return res.status(400).json({ error: 'Cannot end before the hangout starts' });
+  if (!h.photo) return res.status(400).json({ error: 'Take the photo first, then end it' });
+
+  const ids = memberIds(h.id);
+  const attendees = attendeeIdSet(h, ids);
+
+  // settle the stake pool if there is one and it has not settled yet
+  if (h.crypto_event_id && !h.settled_at) {
+    try {
+      // make sure every attendee who staked is checked in so they get paid
+      const staked = new Set(
+        db.prepare('SELECT user_id FROM hangout_stakes WHERE hangout_id = ?').all(h.id).map((r) => r.user_id)
+      );
+      for (const id of attendees) {
+        if (!staked.has(id)) continue;
+        const u = db.prepare('SELECT username FROM users WHERE id = ?').get(id);
+        await cryptoApi.checkin(h.crypto_event_id, u.username).catch(() => {});
+      }
+      const result = await cryptoApi.settle(h.crypto_event_id);
+      const ins = db.prepare(`INSERT INTO hangout_settlements (hangout_id, user_id, status, payout_units)
+        VALUES (?, ?, ?, ?) ON CONFLICT(hangout_id, user_id) DO UPDATE SET status = excluded.status, payout_units = excluded.payout_units`);
+      for (const r of result.results || []) {
+        const uname = String(r.userId).replace(/^ty_/, '');
+        const u = db.prepare('SELECT id FROM users WHERE username = ?').get(uname);
+        if (u) ins.run(h.id, u.id, r.status, r.payoutUnits);
+      }
+      db.prepare('UPDATE hangouts SET settled_at = ? WHERE id = ?').run(now(), h.id);
+    } catch (e) {
+      const msg = e instanceof cryptoApi.CryptoError ? e.message : 'Could not settle the pool';
+      return res.status(502).json({ error: msg });
+    }
+  }
+
+  db.prepare('UPDATE hangouts SET completed_at = ? WHERE id = ?').run(now(), h.id);
   res.json({ hangout: hangoutView(db.prepare('SELECT * FROM hangouts WHERE id = ?').get(h.id), req.user.id) });
 });
 
