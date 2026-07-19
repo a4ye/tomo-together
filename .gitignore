@@ -39,6 +39,10 @@ yarn-error.*
 # signing
 .keystore-pass.txt
 
+# live credentials — never commit
+somevariables.txt
+infra/*.tfvars
+
 # terraform
 infra/.terraform/
 infra/*.tfstate

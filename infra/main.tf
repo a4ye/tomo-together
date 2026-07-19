@@ -20,6 +20,26 @@ provider "azurerm" {
 
 provider "cloudflare" {}
 
+# Crypto (Unifold) credentials for the deposit feature. Values live in
+# terraform.tfvars (gitignored) and land as App Service settings — persistent
+# on Azure, never in the repo.
+variable "unifold_secret_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+
+variable "unifold_publishable_key" {
+  type    = string
+  default = ""
+}
+
+variable "treasury_account_id" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+
 locals {
   location   = "westeurope"
   app_name   = "ht6-tomoyard"
@@ -69,6 +89,11 @@ resource "azurerm_linux_web_app" "app" {
     # /home is an Azure Files (CIFS) mount where SQLite WAL mode cannot work.
     SQLITE_JOURNAL = "delete"
     WEBSITE_NODE_DEFAULT_VERSION = "~22"
+    # Crypto/deposit backend (Unifold treasury custody)
+    UNIFOLD_SECRET_KEY       = var.unifold_secret_key
+    UNIFOLD_PUBLISHABLE_KEY  = var.unifold_publishable_key
+    TREASURY_ACCOUNT_ID      = var.treasury_account_id
+    TREASURY_SOURCE_CHAIN_ID = "8453"
   }
 
   lifecycle {

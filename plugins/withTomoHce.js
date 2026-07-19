@@ -1,10 +1,20 @@
-// Local Expo config plugin that recreates the hand-written NFC HCE native pieces
+// Local Expo config plugin that recreates the hand-written NFC native pieces
 // for Android on every `npx expo prebuild`:
 //  - AndroidManifest: NFC permission, HCE feature, HostApduService entry
 //  - res/xml/apduservice.xml + strings for it
-//  - Kotlin sources: HceService, TomoHceModule, TomoHcePackage
+//  - Kotlin sources: HceService (+ TomoHceState/TomoDiag), TomoHceModule,
+//    TomoReaderModule (self-contained ISO-DEP reader; no third-party NFC lib
+//    on the critical path), TomoHcePackage
 //  - MainApplication.kt: manual registration of TomoHcePackage
 //  - app/build.gradle: env-driven release signing (TOMO_UPLOAD_* variables)
+//
+// Why TomoReaderModule exists: react-native-nfc-manager v3 documents itself as
+// legacy-architecture-only, and this app runs RN 0.86 new-arch/bridgeless. Its
+// Android reader path (registerTagEvent -> enableReaderMode arming, plus a
+// deferred bridge Callback invoked later from an NFC binder thread) has
+// several silent no-op branches under the interop layer, which matched the
+// field failure "nothing happens on either phone". TomoReaderModule mirrors
+// Google's CardReader sample directly against the Android SDK instead.
 const { promises: fs } = require('fs');
 const path = require('path');
 const {
@@ -40,6 +50,8 @@ function kotlinSources(packageName) {
 
 import android.nfc.cardemulation.HostApduService
 import android.os.Bundle
+import android.util.Log
+import java.util.Locale
 
 /**
  * In-process shared state between the React Native module (writer) and the
@@ -54,13 +66,41 @@ object TomoHceState {
   // tappedAt without servedAt = contact happened but the SELECT never matched
   // or no payload was set - that distinction pinpoints where a tap died.
   @Volatile var servedAt: Long = 0L
+  // Diagnostics for the hidden overlay in ConfirmScreen.
+  @Volatile var apduCount: Long = 0L
+  @Volatile var lastApduHex: String = ""
+  @Volatile var lastRespHex: String = ""
+  @Volatile var deactivatedAt: Long = 0L
+  @Volatile var deactivatedReason: Int = -1
 }
 
 /**
+ * Shared diagnostics ring buffer. Written by the HCE service and by
+ * TomoReaderModule; PULLED by JS via TomoReader.getLog() so the overlay works
+ * even if bridge event delivery is broken. Every line is "epochMillis|text".
+ */
+object TomoDiag {
+  private val lines = ArrayDeque<String>()
+
+  @Synchronized
+  fun log(msg: String) {
+    Log.d("TomoNfc", msg)
+    lines.addLast(System.currentTimeMillis().toString() + "|" + msg)
+    while (lines.size > 250) lines.removeFirst()
+  }
+
+  @Synchronized
+  fun snapshot(): List<String> = lines.toList()
+}
+
+private fun ByteArray.tomoHex(): String =
+  joinToString("") { String.format(Locale.ROOT, "%02X", it.toInt() and 0xFF) }
+
+/**
  * Answers ISO-DEP SELECT commands for AID ${AID} with the current payload
- * followed by SW 90 00. No length prefix and no TLV framing: the scanner in
- * src/nfc.ts does String.fromCharCode over every byte before the trailing
- * two status bytes.
+ * followed by SW 90 00. No length prefix and no TLV framing: the scanner
+ * (TomoReaderModule / src/nfc.ts) decodes every byte before the trailing two
+ * status bytes as ASCII.
  */
 class HceService : HostApduService() {
 
@@ -74,29 +114,50 @@ class HceService : HostApduService() {
     private val SW_NOT_FOUND = byteArrayOf(0x6A, 0x82.toByte())
   }
 
+  private fun reply(bytes: ByteArray): ByteArray {
+    TomoHceState.lastRespHex = bytes.tomoHex()
+    return bytes
+  }
+
   override fun processCommandApdu(commandApdu: ByteArray?, extras: Bundle?): ByteArray {
     TomoHceState.tappedAt = System.currentTimeMillis()
+    TomoHceState.apduCount = TomoHceState.apduCount + 1
+    val hex = if (commandApdu == null) "null" else commandApdu.tomoHex()
+    TomoHceState.lastApduHex = hex
+    TomoDiag.log("hce: apdu << " + hex)
     if (commandApdu == null || commandApdu.size < SELECT_APDU_HEADER.size) {
-      return SW_NOT_FOUND
+      TomoDiag.log("hce: not our SELECT (too short) >> 6A82")
+      return reply(SW_NOT_FOUND)
     }
     for (i in SELECT_APDU_HEADER.indices) {
       if (commandApdu[i] != SELECT_APDU_HEADER[i]) {
-        return SW_NOT_FOUND
+        TomoDiag.log("hce: not our SELECT (AID mismatch) >> 6A82")
+        return reply(SW_NOT_FOUND)
       }
     }
-    val payload = TomoHceState.payload ?: return SW_NOT_FOUND
+    val payload = TomoHceState.payload
+    if (payload == null) {
+      TomoDiag.log("hce: SELECT matched but no payload armed >> 6A82")
+      return reply(SW_NOT_FOUND)
+    }
     TomoHceState.servedAt = System.currentTimeMillis()
-    return payload.toByteArray(Charsets.US_ASCII) + SW_OK
+    TomoDiag.log("hce: served payload (" + payload.length + " chars) >> ...9000")
+    return reply(payload.toByteArray(Charsets.US_ASCII) + SW_OK)
   }
 
   override fun onDeactivated(reason: Int) {
-    // Intentionally empty: the payload must stay readable across multiple
-    // taps until JS explicitly clears it via TomoHce.clear().
+    // The payload intentionally stays readable across multiple taps until JS
+    // explicitly clears it via TomoHce.clear().
+    TomoHceState.deactivatedAt = System.currentTimeMillis()
+    TomoHceState.deactivatedReason = reason
+    val name = if (reason == DEACTIVATION_LINK_LOSS) "link-loss" else "deselected"
+    TomoDiag.log("hce: deactivated (" + name + ")")
   }
 }
 `,
     'TomoHceModule.kt': `package ${packageName}
 
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -109,6 +170,7 @@ class TomoHceModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun setPayload(payload: String, promise: Promise) {
     TomoHceState.payload = payload
+    TomoDiag.log("hce: payload armed (" + payload.length + " chars)")
     promise.resolve(null)
   }
 
@@ -117,6 +179,12 @@ class TomoHceModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     TomoHceState.payload = null
     TomoHceState.tappedAt = 0L
     TomoHceState.servedAt = 0L
+    TomoHceState.apduCount = 0L
+    TomoHceState.lastApduHex = ""
+    TomoHceState.lastRespHex = ""
+    TomoHceState.deactivatedAt = 0L
+    TomoHceState.deactivatedReason = -1
+    TomoDiag.log("hce: payload cleared")
     promise.resolve(null)
   }
 
@@ -129,6 +197,277 @@ class TomoHceModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   fun lastServedAt(promise: Promise) {
     promise.resolve(TomoHceState.servedAt.toDouble())
   }
+
+  // One pull for the diagnostics overlay: everything the HCE side knows.
+  @ReactMethod
+  fun getDiagnostics(promise: Promise) {
+    val map = Arguments.createMap()
+    map.putBoolean("payloadSet", TomoHceState.payload != null)
+    map.putDouble("tappedAt", TomoHceState.tappedAt.toDouble())
+    map.putDouble("servedAt", TomoHceState.servedAt.toDouble())
+    map.putDouble("apduCount", TomoHceState.apduCount.toDouble())
+    map.putString("lastApduHex", TomoHceState.lastApduHex)
+    map.putString("lastRespHex", TomoHceState.lastRespHex)
+    map.putDouble("deactivatedAt", TomoHceState.deactivatedAt.toDouble())
+    map.putInt("deactivatedReason", TomoHceState.deactivatedReason)
+    promise.resolve(map)
+  }
+}
+`,
+    'TomoReaderModule.kt': `package ${packageName}
+
+import android.app.Activity
+import android.nfc.NfcAdapter
+import android.nfc.Tag
+import android.nfc.tech.IsoDep
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.ReactContextBaseJavaModule
+import com.facebook.react.bridge.ReactMethod
+import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
+
+private fun ByteArray.tomoRdrHex(): String =
+  joinToString("") { String.format(Locale.ROOT, "%02X", it.toInt() and 0xFF) }
+
+/**
+ * Self-contained ISO-DEP reader for the scan side of tap-to-confirm, talking
+ * straight to the Android SDK (mirrors Google's android-CardReader sample):
+ *
+ *   NfcAdapter.enableReaderMode(activity, callback,
+ *       FLAG_READER_NFC_A or FLAG_READER_NFC_B or FLAG_READER_SKIP_NDEF_CHECK,
+ *       extras)
+ *
+ * enableReaderMode is invoked on the main thread; onTagDiscovered arrives on a
+ * binder thread where blocking IsoDep I/O is safe. Reader mode also disables
+ * this device's own card emulation, which pins the two-phone roles: the
+ * scanner is the reader, the shower is the card. Without it, both phones
+ * advertise the same Tomo AID and the controllers pair nondeterministically.
+ *
+ * readOnce() keeps the reader session armed across grazing contacts and wrong
+ * status words until it either reads a payload, is stopped, or times out.
+ * Every step is appended to TomoDiag (pull) and mirrored as a TomoNfcEvent
+ * device event (push) for the diagnostics overlay.
+ */
+class TomoReaderModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
+
+  companion object {
+    // 00 A4 04 00 | Lc=06 | AID ${AID} | Le=00
+    private val SELECT_APDU = byteArrayOf(
+      0x00, 0xA4.toByte(), 0x04, 0x00, 0x06,
+      0xF0.toByte(), 0x54, 0x4F, 0x4D, 0x4F, 0x31,
+      0x00,
+    )
+  }
+
+  private class Session(val promise: Promise, val activity: Activity) {
+    val done = AtomicBoolean(false)
+    var timeout: Runnable? = null
+  }
+
+  private val mainHandler = Handler(Looper.getMainLooper())
+  private val lock = Any()
+  private var session: Session? = null
+  private var lastResult: String? = null
+
+  override fun getName(): String = "TomoReader"
+
+  private fun adapter(): NfcAdapter? = NfcAdapter.getDefaultAdapter(reactApplicationContext)
+
+  private fun emit(msg: String) {
+    TomoDiag.log(msg)
+    try {
+      val map = Arguments.createMap()
+      map.putDouble("ts", System.currentTimeMillis().toDouble())
+      map.putString("msg", msg)
+      reactApplicationContext.emitDeviceEvent("TomoNfcEvent", map)
+    } catch (t: Throwable) {
+      // Diagnostics only - event plumbing must never break the reader. The
+      // same line is still in TomoDiag for the pull path.
+    }
+  }
+
+  // Cheap liveness + binary-freshness probe for the overlay.
+  @ReactMethod
+  fun ping(promise: Promise) {
+    promise.resolve("tomo-reader-1")
+  }
+
+  @ReactMethod
+  fun isSupported(promise: Promise) {
+    promise.resolve(adapter() != null)
+  }
+
+  @ReactMethod
+  fun isEnabled(promise: Promise) {
+    val a = adapter()
+    promise.resolve(a != null && a.isEnabled)
+  }
+
+  @ReactMethod
+  fun getLog(promise: Promise) {
+    val arr = Arguments.createArray()
+    for (line in TomoDiag.snapshot()) arr.pushString(line)
+    promise.resolve(arr)
+  }
+
+  // Rescue path: the last successful read, delivered via a fresh
+  // request/response call in case a deferred promise resolution ever fails to
+  // arrive in JS. Reading clears it.
+  @ReactMethod
+  fun takeResult(promise: Promise) {
+    var r: String? = null
+    synchronized(lock) {
+      r = lastResult
+      lastResult = null
+    }
+    promise.resolve(r)
+  }
+
+  @ReactMethod
+  fun readOnce(timeoutMs: Double, promise: Promise) {
+    val a = adapter()
+    if (a == null) {
+      emit("reader: no NFC adapter on this phone")
+      promise.reject("no_nfc", "This phone has no NFC")
+      return
+    }
+    if (!a.isEnabled) {
+      emit("reader: NFC adapter is turned off")
+      promise.reject("nfc_off", "NFC is turned off in the phone settings")
+      return
+    }
+    val activity = currentActivity
+    if (activity == null) {
+      emit("reader: no foreground activity")
+      promise.reject("no_activity", "The app is not in the foreground")
+      return
+    }
+
+    val s = Session(promise, activity)
+    synchronized(lock) {
+      if (session != null) {
+        promise.reject("busy", "A scan is already running")
+        return
+      }
+      session = s
+    }
+
+    val timeoutRunnable = Runnable {
+      finish(s, null, "timeout", "No phone was read in time")
+    }
+    s.timeout = timeoutRunnable
+    mainHandler.postDelayed(timeoutRunnable, timeoutMs.toLong())
+
+    mainHandler.post {
+      if (s.done.get()) return@post
+      try {
+        val extras = Bundle()
+        extras.putInt(NfcAdapter.EXTRA_READER_PRESENCE_CHECK_DELAY, 250)
+        a.enableReaderMode(
+          activity,
+          NfcAdapter.ReaderCallback { tag -> onTag(s, tag) },
+          NfcAdapter.FLAG_READER_NFC_A or
+            NfcAdapter.FLAG_READER_NFC_B or
+            NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK,
+          extras,
+        )
+        emit("reader: reader mode ON (TomoReader native, A|B|skip-ndef)")
+      } catch (t: Throwable) {
+        emit("reader: enableReaderMode threw " + t.javaClass.simpleName + ": " + t.message)
+        finish(s, null, "reader_error", "Could not switch NFC into reader mode")
+      }
+    }
+  }
+
+  // Binder thread: blocking I/O is safe here.
+  private fun onTag(s: Session, tag: Tag) {
+    val techs = tag.techList.joinToString(",") { it.substringAfterLast('.') }
+    emit("reader: tag discovered techs=" + techs)
+    val iso = IsoDep.get(tag)
+    if (iso == null) {
+      emit("reader: tag has no IsoDep, still listening")
+      return
+    }
+    try {
+      iso.connect()
+      iso.setTimeout(2000)
+      emit("reader: IsoDep connected, apdu >> " + SELECT_APDU.tomoRdrHex())
+      val resp = iso.transceive(SELECT_APDU)
+      emit("reader: apdu << " + resp.tomoRdrHex())
+      if (resp.size >= 2) {
+        val sw = ((resp[resp.size - 2].toInt() and 0xFF) shl 8) or
+          (resp[resp.size - 1].toInt() and 0xFF)
+        if (sw == 0x9000) {
+          val payload = String(resp, 0, resp.size - 2, Charsets.US_ASCII)
+          emit("reader: got payload (" + payload.length + " chars)")
+          finish(s, payload, null, null)
+          return
+        }
+        emit("reader: status " + String.format(Locale.ROOT, "%04X", sw) +
+          " (other phone not showing a code?), still listening")
+      } else {
+        emit("reader: response too short, still listening")
+      }
+    } catch (t: Throwable) {
+      emit("reader: connect/transceive failed (" + t.javaClass.simpleName + "), still listening")
+    } finally {
+      try {
+        iso.close()
+      } catch (t: Throwable) {
+        // ignore
+      }
+    }
+  }
+
+  private fun finish(s: Session, payload: String?, errCode: String?, errMsg: String?) {
+    if (!s.done.compareAndSet(false, true)) return
+    synchronized(lock) {
+      if (session === s) session = null
+      if (payload != null) lastResult = payload
+    }
+    val t = s.timeout
+    if (t != null) mainHandler.removeCallbacks(t)
+    mainHandler.post {
+      try {
+        adapter()?.disableReaderMode(s.activity)
+        TomoDiag.log("reader: reader mode OFF")
+      } catch (x: Throwable) {
+        TomoDiag.log("reader: disableReaderMode threw " + x.javaClass.simpleName)
+      }
+    }
+    if (errCode == null) {
+      s.promise.resolve(payload)
+    } else {
+      emit("reader: session end (" + errCode + ")")
+      s.promise.reject(errCode, errMsg)
+    }
+  }
+
+  @ReactMethod
+  fun stop(promise: Promise) {
+    var s: Session? = null
+    synchronized(lock) { s = session }
+    val active = s
+    if (active != null) finish(active, null, "cancelled", "Scan was cancelled")
+    promise.resolve(null)
+  }
+
+  @Suppress("UNUSED_PARAMETER")
+  @ReactMethod
+  fun addListener(eventName: String) {
+    // Required stub for NativeEventEmitter compatibility.
+  }
+
+  @Suppress("UNUSED_PARAMETER")
+  @ReactMethod
+  fun removeListeners(count: Int) {
+    // Required stub for NativeEventEmitter compatibility.
+  }
 }
 `,
     'TomoHcePackage.kt': `package ${packageName}
@@ -140,7 +479,7 @@ import com.facebook.react.uimanager.ViewManager
 
 class TomoHcePackage : ReactPackage {
   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> =
-    listOf(TomoHceModule(reactContext))
+    listOf(TomoHceModule(reactContext), TomoReaderModule(reactContext))
 
   override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> =
     emptyList()

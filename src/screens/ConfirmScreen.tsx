@@ -1,6 +1,6 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
@@ -9,8 +9,10 @@ import OutlinedText from '../components/OutlinedText';
 import YardBackground from '../components/YardBackground';
 import TopBar from '../components/TopBar';
 import {
-  cancelScan, lastServedAt, lastTapAt, nfcState, scanOnce, startShowing, stopShowing,
+  cancelScan, diagLog, getDiagSnapshot, lastServedAt, lastTapAt, moduleInfo, nfcState,
+  scanOnce, startShowing, stopShowing, subscribeDiag,
 } from '../nfc';
+import type { DiagEntry } from '../nfc';
 import { useNav } from '../state/nav';
 import { useSession } from '../state/session';
 import { C, F } from '../theme';
@@ -27,6 +29,13 @@ function PhonesTouching({ size = 120 }: { size?: number }) {
         fill="none" stroke={C.orange} strokeWidth={3} strokeLinecap="round" />
     </Svg>
   );
+}
+
+function fmtTime(ts: number): string {
+  if (!ts) return '--:--:--.---';
+  const d = new Date(ts);
+  const p = (n: number, w = 2) => String(n).padStart(w, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
 }
 
 type Phase = 'pick' | 'showing' | 'scanning' | 'done';
@@ -53,8 +62,48 @@ export default function ConfirmScreen({
   const tapPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const handled = useRef(false);
   const armed = useRef(false);
+  const tapSeenRef = useRef(false);
+  const servedSeenRef = useRef(false);
+
+  // ---- hidden diagnostics overlay: 5 rapid taps on the QR/code/camera area ----
+  const [diagOpen, setDiagOpen] = useState(false);
+  const [diagRows, setDiagRows] = useState<DiagEntry[]>([]);
+  const diagTapRef = useRef({ n: 0, t: 0 });
+
+  const onDiagTap = useCallback(() => {
+    const now = Date.now();
+    const prev = diagTapRef.current;
+    const n = now - prev.t < 2200 ? prev.n + 1 : 1;
+    diagTapRef.current = { n, t: now };
+    if (n >= 5) {
+      diagTapRef.current = { n: 0, t: 0 };
+      setDiagOpen((v) => {
+        if (!v) diagLog('ui: diagnostics overlay opened');
+        return !v;
+      });
+    }
+  }, []);
 
   useEffect(() => {
+    if (!diagOpen) return;
+    let live = true;
+    const refresh = async () => {
+      const rows = await getDiagSnapshot();
+      if (live) setDiagRows(rows);
+    };
+    refresh();
+    const id = setInterval(refresh, 700);
+    const unsub = subscribeDiag(refresh);
+    return () => {
+      live = false;
+      clearInterval(id);
+      unsub();
+    };
+  }, [diagOpen]);
+
+  useEffect(() => {
+    const mi = moduleInfo();
+    diagLog(`ui: confirm open (modules hce=${mi.tomoHce} reader=${mi.tomoReader} nfcMgr=${mi.nfcManagerNative})`);
     nfcState().then(setNfc);
     return () => {
       armed.current = false;
@@ -73,23 +122,35 @@ export default function ConfirmScreen({
   // ---- show side: QR always, NFC too when the hardware allows it ----
   const show = async () => {
     setStatus(null);
+    diagLog('ui: "Show my code" pressed');
     try {
       const { payload: p } = await api.nfcToken(hangoutId);
+      diagLog(`ui: token fetched (${p.length} chars)`);
       setPayload(p);
       const on = await startShowing(p);
+      diagLog(`ui: startShowing -> tap hint ${on ? 'ON' : 'OFF'}`);
       setHceOn(on);
       setPhase('showing');
       const showStart = Date.now();
-      if (on) {
-        tapPollRef.current = setInterval(async () => {
-          const [t, s] = await Promise.all([lastTapAt(), lastServedAt()]);
-          if (t > showStart) setTapSeen(true);
-          if (s > showStart) setServedSeen(true);
-        }, 1000);
-      }
+      // Poll the HCE service state whenever the module exists - even when the
+      // hint is off, the payload stays armed and the radio may come back.
+      tapPollRef.current = setInterval(async () => {
+        const [t, s] = await Promise.all([lastTapAt(), lastServedAt()]);
+        if (t > showStart && !tapSeenRef.current) {
+          tapSeenRef.current = true;
+          diagLog('ui: phones touched (hce got an apdu)');
+          setTapSeen(true);
+        }
+        if (s > showStart && !servedSeenRef.current) {
+          servedSeenRef.current = true;
+          diagLog('ui: their phone read the payload (sw 9000)');
+          setServedSeen(true);
+        }
+      }, 1000);
       pollRef.current = setInterval(async () => {
         try {
           if (await isConfirmedWithOther()) {
+            diagLog('ui: server says confirmed, closing');
             if (pollRef.current) clearInterval(pollRef.current);
             await stopShowing();
             setResult({ vibeGain: 0, acornGain: 0, bonusReason: null });
@@ -100,25 +161,29 @@ export default function ConfirmScreen({
         }
       }, 2500);
     } catch (e) {
+      diagLog(`ui: show failed (${e instanceof Error ? e.message : 'unknown'})`);
       setStatus(e instanceof Error ? e.message : 'Could not start');
     }
   };
 
   // ---- scan side ----
-  const handlePayload = useCallback(async (raw: string) => {
+  const handlePayload = useCallback(async (raw: string, src: 'qr' | 'nfc' = 'qr') => {
     if (handled.current) return;
     handled.current = true;
+    diagLog(`ui: payload via ${src}, confirming with server...`);
     try {
       const parts = raw.split('|');
       if (parts[0] !== 'TY1' || parts.length !== 4) throw new Error('That is not a Tomo Yard code');
       if (Number(parts[1]) !== hangoutId) throw new Error('That code is for a different hangout');
       if (parts[2] !== otherUsername) throw new Error(`That code belongs to @${parts[2]}, not @${otherUsername}`);
       const r = await api.confirm(hangoutId, parts[2], parts[3]);
+      diagLog('ui: confirm OK');
       armed.current = false;
       await cancelScan();
       setResult({ vibeGain: r.vibeGain, acornGain: r.acornGain, bonusReason: r.bonusReason });
       setPhase('done');
     } catch (e) {
+      diagLog(`ui: confirm failed (${e instanceof Error ? e.message : 'unknown'})`);
       setStatus(e instanceof Error ? e.message : 'Could not confirm, try again');
       setTimeout(() => {
         handled.current = false;
@@ -139,27 +204,42 @@ export default function ConfirmScreen({
       return;
     }
     armed.current = true;
+    diagLog('ui: nfc scan loop armed');
     setNfcNote('NFC is listening. Touch the phones back to back, slowly.');
     while (armed.current && !handled.current) {
       try {
         const p = await scanOnce();
         if (!armed.current) break;
-        await handlePayload(p);
+        await handlePayload(p, 'nfc');
         break;
       } catch (e) {
         if (!armed.current) break;
         const msg = e instanceof Error && e.message ? e.message : 'no contact yet';
-        setNfcNote(`NFC: ${msg}. Still listening.`);
-        await new Promise((r) => setTimeout(r, 800));
+        if (msg === 'cancelled') break;
+        diagLog(`ui: scan loop retry (${msg})`);
+        if (msg === 'still waiting for a touch') {
+          setNfcNote('NFC is listening. Touch the phones back to back, slowly.');
+        } else if (msg === 'This phone has no NFC' || msg.startsWith('NFC is turned off')) {
+          // Hard condition - stop looping instead of hammering the radio.
+          setNfcNote(`${msg}. Use the camera on their code.`);
+          armed.current = false;
+          break;
+        } else {
+          setNfcNote(`NFC: ${msg}. Still listening.`);
+        }
+        await new Promise((r) => setTimeout(r, 250));
       }
     }
+    diagLog('ui: nfc scan loop ended');
   }, [handlePayload]);
 
   const scan = async () => {
     setStatus(null);
     handled.current = false;
+    diagLog(`ui: "Scan ${otherUsername}'s code" pressed`);
     if (!permission?.granted) {
       const r = await requestPermission();
+      diagLog(`ui: camera permission ${r.granted ? 'granted' : 'DENIED'}`);
       if (!r.granted) {
         setStatus('The camera is needed to scan their code.');
         return;
@@ -169,6 +249,8 @@ export default function ConfirmScreen({
     armNfcLoop();
   };
 
+  const mi = moduleInfo();
+
   return (
     <View style={{ flex: 1 }}>
       <YardBackground bg={C.tan} tint={C.tanPaw} seed={27} />
@@ -177,7 +259,11 @@ export default function ConfirmScreen({
       </View>
 
       <View style={{ flex: 1, padding: 20, alignItems: 'center' }}>
-        {phase !== 'scanning' && <PhonesTouching size={130} />}
+        {phase !== 'scanning' && (
+          <Pressable onPress={onDiagTap}>
+            <PhonesTouching size={130} />
+          </Pressable>
+        )}
         <Text style={{ fontFamily: F.display, fontSize: 15, color: C.darkInk, marginTop: 6, textAlign: 'center' }}>
           You and {otherName}
         </Text>
@@ -208,14 +294,15 @@ export default function ConfirmScreen({
 
         {phase === 'showing' && payload && (
           <View style={{ alignItems: 'center', marginTop: 12 }}>
-            <View
+            <Pressable
+              onPress={onDiagTap}
               style={{
                 backgroundColor: C.white, borderWidth: 3, borderColor: C.darkInk,
                 borderRadius: 6, padding: 14,
               }}
             >
               <QRCode value={payload} size={214} color={C.darkInk} backgroundColor={C.white} />
-            </View>
+            </Pressable>
             <Text style={{ fontFamily: F.body, fontSize: 13.5, color: C.brown, marginTop: 12, textAlign: 'center' }}>
               Have {otherName} scan this{hceOn ? ', or touch your phones back to back' : ''}.
               This screen will notice when it works.
@@ -239,7 +326,8 @@ export default function ConfirmScreen({
 
         {phase === 'scanning' && (
           <>
-            <View
+            <Pressable
+              onPress={onDiagTap}
               style={{
                 width: '92%', aspectRatio: 1, borderWidth: 3, borderColor: C.darkInk,
                 borderRadius: 6, overflow: 'hidden', backgroundColor: '#EFE8D8', marginTop: 12,
@@ -250,10 +338,10 @@ export default function ConfirmScreen({
                   facing="back"
                   style={{ width: '100%', height: '100%' }}
                   barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-                  onBarcodeScanned={({ data }) => handlePayload(data)}
+                  onBarcodeScanned={({ data }) => handlePayload(data, 'qr')}
                 />
               )}
-            </View>
+            </Pressable>
             <Text style={{ fontFamily: F.body, fontSize: 13.5, color: C.brown, marginTop: 10, textAlign: 'center' }}>
               Point the camera at {otherName}'s code.
             </Text>
@@ -292,6 +380,41 @@ export default function ConfirmScreen({
           </View>
         )}
       </View>
+
+      {diagOpen && (
+        <View
+          style={{
+            position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '46%',
+            backgroundColor: 'rgba(24,18,12,0.94)', borderTopWidth: 2, borderColor: C.orange,
+            paddingBottom: insets.bottom, zIndex: 40, elevation: 40,
+          }}
+        >
+          <Pressable
+            onPress={() => setDiagOpen(false)}
+            style={{ paddingHorizontal: 8, paddingVertical: 7, borderBottomWidth: 1, borderColor: '#5A4632' }}
+          >
+            <Text style={{ color: '#FFD37E', fontSize: 11, fontFamily: 'monospace' }}>
+              NFC DIAG · hce:{mi.tomoHce ? 'yes' : 'MISSING'} rdr:{mi.tomoReader ? 'yes' : 'MISSING'} mgr:
+              {mi.nfcManagerNative ? 'yes' : 'MISSING'} · sup:{nfc.supported ? 'y' : 'N'} on:
+              {nfc.enabled ? 'y' : 'N'} · tap here to close
+            </Text>
+          </Pressable>
+          <ScrollView style={{ paddingHorizontal: 8, paddingTop: 4 }}>
+            {diagRows.slice().reverse().map((r, i) => (
+              <Text
+                key={`${r.ts}-${i}`}
+                style={{
+                  color: r.src === 'hce' ? '#8FD98F' : r.src === 'native' ? '#9FCFFF' : '#EFE3CF',
+                  fontSize: 10, fontFamily: 'monospace', marginBottom: 1,
+                }}
+              >
+                {fmtTime(r.ts)} {r.msg}
+              </Text>
+            ))}
+            <View style={{ height: 8 }} />
+          </ScrollView>
+        </View>
+      )}
     </View>
   );
 }
