@@ -20,6 +20,15 @@ export type FriendView = PublicUser & {
   vibePerLevel: number;
 };
 
+export type FriendProfile = FriendView & {
+  friendsSince: string; // ISO
+  lastHangout: string | null; // ISO of most recent shared completed hangout
+  hangoutCount: number;
+  upcomingCount: number;
+  topActivities: string[];
+  recentMemories: Hangout[];
+};
+
 export type Activity = { id: string; label: string; combined?: number };
 
 export type WardrobeItem = { id: string; name: string; price: number; type?: 'accessory' | 'mascot' };
@@ -44,6 +53,7 @@ export type Hangout = {
 export type Route =
   | { name: 'yard' }
   | { name: 'friends' }
+  | { name: 'friendProfile'; username: string }
   | { name: 'hangouts' }
   | { name: 'newHangout' }
   | { name: 'hangoutDetail'; hangoutId: number }
