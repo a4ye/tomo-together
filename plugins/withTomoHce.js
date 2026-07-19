@@ -341,7 +341,9 @@ class TomoReaderModule(reactContext: ReactApplicationContext) : ReactContextBase
       promise.reject("nfc_off", "NFC is turned off in the phone settings")
       return
     }
-    val activity = currentActivity
+    // RN 0.80+ ReactContextBaseJavaModule is Kotlin: no synthetic
+    // currentActivity property; the supported accessor lives on the context.
+    val activity = reactApplicationContext.currentActivity
     if (activity == null) {
       emit("reader: no foreground activity")
       promise.reject("no_activity", "The app is not in the foreground")
