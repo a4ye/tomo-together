@@ -1,11 +1,13 @@
 import { Baloo2_700Bold, Baloo2_800ExtraBold } from '@expo-google-fonts/baloo-2';
 import { Delius_400Regular } from '@expo-google-fonts/delius';
 import { useFonts } from 'expo-font';
+import * as Notifications from 'expo-notifications';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useRef } from 'react';
-import { Animated, View } from 'react-native';
+import { Animated, AppState, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import YardBackground from './src/components/YardBackground';
+import { ensureNotifPermission, staleUsernameFromResponse, syncStaleReminders } from './src/notifications';
 import { NavProvider, useNav } from './src/state/nav';
 import { SessionProvider, useSession } from './src/state/session';
 import { C } from './src/theme';
@@ -55,7 +57,8 @@ function Screen({ route }: { route: Route }) {
 
 function Navigator() {
   const nav = useNav();
-  const { refreshMe } = useSession();
+  const { push } = nav;
+  const { refreshMe, api } = useSession();
   const pop = useRef(new Animated.Value(1)).current;
   const key = JSON.stringify(nav.route);
 
@@ -67,6 +70,31 @@ function Navigator() {
   useEffect(() => {
     if (nav.route.name === 'yard') refreshMe();
   }, [nav.route, refreshMe]);
+
+  // Stale-friend reminders: keep local notifications in sync with friend data,
+  // and open a friend's profile when their reminder is tapped.
+  useEffect(() => {
+    let alive = true;
+    const syncNow = () =>
+      api.friends().then((r) => syncStaleReminders(r.friends)).catch(() => {});
+    ensureNotifPermission().then((granted) => { if (granted && alive) syncNow(); });
+    const appSub = AppState.addEventListener('change', (s) => { if (s === 'active') syncNow(); });
+    const interval = setInterval(syncNow, 60 * 1000);
+    const respSub = Notifications.addNotificationResponseReceivedListener((resp) => {
+      const u = staleUsernameFromResponse(resp);
+      if (u) push({ name: 'friendProfile', username: u });
+    });
+    Notifications.getLastNotificationResponseAsync().then((resp) => {
+      const u = staleUsernameFromResponse(resp);
+      if (u && alive) push({ name: 'friendProfile', username: u });
+    });
+    return () => {
+      alive = false;
+      appSub.remove();
+      clearInterval(interval);
+      respSub.remove();
+    };
+  }, [api, push]);
 
   return (
     <View style={{ flex: 1, backgroundColor: C.tan }}>

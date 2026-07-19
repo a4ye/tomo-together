@@ -5,6 +5,7 @@ import Avatar from '../components/Avatar';
 import { DoodleButton, DoodleCard } from '../components/Doodle';
 import OutlinedText from '../components/OutlinedText';
 import { AnimatedPixelSprite, FLAME_FRAMES } from '../components/PixelSprite';
+import TitleBadge from '../components/TitleBadge';
 import YardBackground from '../components/YardBackground';
 import TopBar from '../components/TopBar';
 import { useNav } from '../state/nav';
@@ -67,20 +68,7 @@ function FriendRow({ f, seed, onPress }: { f: FriendView; seed: number; onPress:
                   @{f.username}
                 </Text>
               </View>
-              {f.streak ? (
-                <>
-                  <Text style={{ fontFamily: F.display, fontSize: 11, color: C.orange }}>
-                    Friendship streak
-                  </Text>
-                  <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.brown }}>
-                    {`You've been hanging with ${f.name} a lot!`}
-                  </Text>
-                </>
-              ) : (
-                <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.brown }}>
-                  Birthday {f.birthday.replace('-', '/')}
-                </Text>
-              )}
+              <TitleBadge title={f.title} kind={f.titleKind} style={{ marginTop: 3, marginBottom: 1 }} />
               <VibeBar f={f} />
             </View>
           </View>

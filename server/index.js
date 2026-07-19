@@ -271,6 +271,22 @@ function memberIds(hangoutId) {
     .all(hangoutId).map((r) => r.user_id);
 }
 
+// A short status/title for a friendship, from vibe + streak + staleness.
+// TITLE_STALE_MS is intentionally low so "Need to hang out" is demoable.
+const TITLE_STALE_MS = 2 * 60 * 1000; // 2 minutes
+function friendTitle({ vibeLevel, streak, lastHangoutAt, friendsSince }) {
+  const now = Date.now();
+  const last = lastHangoutAt ? new Date(lastHangoutAt).getTime() : null;
+  const since = friendsSince ? new Date(friendsSince).getTime() : now;
+  const stale = last != null ? now - last > TITLE_STALE_MS : now - since > TITLE_STALE_MS;
+  if (stale) return { title: 'Need to hang out', titleKind: 'stale' };
+  if (streak) return { title: 'On a streak', titleKind: 'streak' };
+  if (vibeLevel >= 3) return { title: 'Best friend', titleKind: 'best' };
+  if (last == null) return { title: 'New friend', titleKind: 'new' };
+  if (vibeLevel >= 2) return { title: 'Close friend', titleKind: 'close' };
+  return { title: 'Friend', titleKind: 'friend' };
+}
+
 // Completed hangouts both users attended: last one + count over the past 30 days.
 function hangoutStats(meId, otherId) {
   const cutoff = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
@@ -455,8 +471,14 @@ app.get('/friends', auth, (req, res) => {
       vibeIntoLevel: f.vibe % VIBE_PER_LEVEL,
       vibePerLevel: VIBE_PER_LEVEL,
     };
-    if (f.status === 'accepted') friends.push({ ...view, ...hangoutStats(me, otherId) });
-    else if (f.requested_by === me) outgoing.push(view);
+    if (f.status === 'accepted') {
+      const stats = hangoutStats(me, otherId);
+      const title = friendTitle({
+        vibeLevel: view.vibeLevel, streak: stats.streak,
+        lastHangoutAt: stats.lastHangoutAt, friendsSince: f.created_at,
+      });
+      friends.push({ ...view, ...stats, ...title });
+    } else if (f.requested_by === me) outgoing.push(view);
     else incoming.push(view);
   }
   friends.sort((x, y) => y.vibe - x.vibe);
@@ -501,6 +523,12 @@ app.get('/friends/:username', auth, (req, res) => {
       upcomingCount: upcoming.length,
       topActivities,
       recentMemories: completed.slice(0, 4).map((h) => hangoutView(h, me)),
+      ...friendTitle({
+        vibeLevel: level(f.vibe),
+        streak: hangoutStats(me, other.id).streak,
+        lastHangoutAt: completed[0] ? completed[0].completed_at : null,
+        friendsSince: f.created_at,
+      }),
     },
   });
 });
