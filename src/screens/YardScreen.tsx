@@ -135,18 +135,33 @@ export default function YardScreen() {
   }, [friends]);
 
   const spots = useMemo(() => {
-    const yardTop = height * 0.42;
-    const yardH = height * 0.38;
-    return friends.slice(0, 8).map((f, i) => {
+    const list = friends.slice(0, 8);
+    const perRow = 3;
+    // Keep friends on the open foreground lawn: laneTop sits just below the back
+    // tree/crest line (~0.50h) so avatars never overlap the trees, and laneBottom
+    // stays above the pond. Rows go back-to-front.
+    const laneTop = height * 0.53;
+    const laneBottom = height * 0.72;
+    const rows = Math.max(1, Math.ceil(list.length / perRow));
+    const rowGap = rows > 1 ? (laneBottom - laneTop) / (rows - 1) : 0;
+    const cellW = (width - 24) / perRow;
+    return list.map((f, i) => {
       const sad = f.username === nudge;
-      const baseY = yardTop + (i % 4) * (yardH / 4.4) + wob(i * 31) * 22;
+      const row = Math.floor(i / perRow);
+      const col = i % perRow;
+      // front rows (higher i) are larger and, being mapped later, draw on top -
+      // giving a natural front-over-back depth to the crowd.
+      const size = 58 + row * 9 + Math.round(wob(i * 7) * 8);
+      const cx = 12 + col * cellW + cellW / 2 + (wob(i * 17 + 2) - 0.5) * cellW * 0.5;
+      const x = Math.min(Math.max(8, cx - size / 2), width - size - 8);
+      const baseY = laneTop + row * rowGap + (wob(i * 31) - 0.5) * 16;
       return {
         friend: f,
         sad,
-        x: 10 + ((i % 2) * 0.5 + wob(i * 17 + 2) * 0.38) * (width - 120),
-        // keep the sad friend low enough that its speech bubble clears the header chips
-        y: sad ? Math.max(baseY, height * 0.52) : baseY,
-        size: 64 + Math.round(wob(i * 7) * 14),
+        x,
+        // keep the sad friend's speech bubble clear of the header chips
+        y: sad ? Math.max(baseY, height * 0.53) : baseY,
+        size,
         delay: Math.round(wob(i * 3) * 1200),
       };
     });
