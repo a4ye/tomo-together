@@ -44,14 +44,14 @@ jobs:
           install -m 600 /dev/null builder_key
           printf '%s\n' "${{ secrets.BUILDER_SSH_KEY }}" > builder_key
 
-      - name: Wait for SSH
+      - name: Wait for builder (SSH + cloud-init toolchain)
         run: |
-          for i in $(seq 1 30); do
+          for i in $(seq 1 60); do
             ssh -i builder_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 \
-              azureuser@${{ secrets.BUILDER_HOST }} 'echo up' && exit 0
-            sleep 5
+              azureuser@${{ secrets.BUILDER_HOST }} 'test -f /opt/build/.ready' && exit 0
+            sleep 10
           done
-          echo "builder never came up" >&2; exit 1
+          echo "builder never became ready" >&2; exit 1
 
       - name: Build on Azure VM
         env:
