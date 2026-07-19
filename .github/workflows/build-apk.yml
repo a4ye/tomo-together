@@ -25,6 +25,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # full history so the commit count can serve as the versionCode
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -40,6 +43,21 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+
+      - name: Stamp versionCode from commit count
+        run: |
+          VERSION_CODE=$(git rev-list --count HEAD)
+          node -e "
+            const fs = require('fs');
+            const j = JSON.parse(fs.readFileSync('app.json', 'utf8'));
+            j.expo.android.versionCode = $VERSION_CODE;
+            fs.writeFileSync('app.json', JSON.stringify(j, null, 2));
+            fs.writeFileSync('version.json', JSON.stringify({
+              versionCode: $VERSION_CODE,
+              versionName: j.expo.version,
+            }));
+          "
+          cat version.json
 
       - name: Generate android project
         run: npx expo prebuild --platform android --no-install
@@ -72,6 +90,11 @@ jobs:
           curl -sf -X PUT -u "$KUDU_USER:$KUDU_PASS" -H 'If-Match: *' \
             --data-binary @android/app/build/outputs/apk/release/app-release.apk \
             'https://ht6-tomoyard.scm.azurewebsites.net/api/vfs/data/apk/tomo-yard.apk'
+          # version metadata must land after the APK so the app never sees
+          # a new version before the matching APK is downloadable
+          curl -sf -X PUT -u "$KUDU_USER:$KUDU_PASS" -H 'If-Match: *' \
+            --data-binary @version.json \
+            'https://ht6-tomoyard.scm.azurewebsites.net/api/vfs/data/apk/version.json'
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

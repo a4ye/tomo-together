@@ -1,3 +1,4 @@
+import * as Application from 'expo-application';
 import React from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -53,6 +54,9 @@ export default function ProfileScreen() {
         <DoodleCard seed={9} style={{ marginTop: 16 }}>
           <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.fadedInk }}>
             Server: {serverUrl}
+          </Text>
+          <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.fadedInk, marginTop: 2 }}>
+            App version {Application.nativeApplicationVersion} (build {Application.nativeBuildVersion})
           </Text>
         </DoodleCard>
 

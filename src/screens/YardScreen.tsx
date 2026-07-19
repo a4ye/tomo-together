@@ -18,6 +18,7 @@ import { useSession } from '../state/session';
 import { BTN_CREAM, NineSliceBg, PANEL_CREAM } from '../components/PixelUI';
 import { C, F, wob } from '../theme';
 import { FriendView, Hangout, Holiday } from '../types';
+import { checkForUpdate, downloadAndInstall, UpdateInfo } from '../updater';
 import MenuOverlay from './MenuOverlay';
 
 function BobbingAvatar({
@@ -67,7 +68,7 @@ function BobbingAvatar({
 }
 
 export default function YardScreen() {
-  const { me, api } = useSession();
+  const { me, api, serverUrl } = useSession();
   const nav = useNav();
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
@@ -76,6 +77,25 @@ export default function YardScreen() {
   const [nextHangout, setNextHangout] = useState<Hangout | null>(null);
   const [needsAttention, setNeedsAttention] = useState(0);
   const [holidays, setHolidays] = useState<Holiday[]>([]);
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [updating, setUpdating] = useState<number | null>(null); // download fraction
+  const [updateError, setUpdateError] = useState<string | null>(null);
+
+  useEffect(() => {
+    checkForUpdate(serverUrl).then(setUpdate);
+  }, [serverUrl]);
+
+  const runUpdate = async () => {
+    setUpdateError(null);
+    setUpdating(0);
+    try {
+      await downloadAndInstall(serverUrl, setUpdating);
+      setUpdating(null);
+    } catch (e) {
+      setUpdating(null);
+      setUpdateError(e instanceof Error ? e.message : 'Update failed');
+    }
+  };
 
   const load = useCallback(() => {
     api.friends().then((r) => setFriends(r.friends)).catch(() => {});
@@ -169,7 +189,7 @@ export default function YardScreen() {
               size={s.size}
               delay={s.delay}
               sad={s.sad}
-              onPress={() => nav.push({ name: 'friends' })}
+              onPress={() => nav.push({ name: 'friendProfile', username: s.friend.username })}
             />
           </View>
         ))
@@ -255,6 +275,23 @@ export default function YardScreen() {
               <Text style={{ fontFamily: F.body, fontSize: 13, color: C.darkInk }}>
                 {needsAttention} hangout{needsAttention > 1 ? 's' : ''} waiting on a photo or confirmation
               </Text>
+            </DoodleCard>
+          </Pressable>
+        )}
+
+        {update && (
+          <Pressable onPress={updating == null ? runUpdate : undefined}>
+            <DoodleCard seed={11} bg={C.yellow} style={{ marginTop: 8, paddingVertical: 8 }}>
+              <Text style={{ fontFamily: F.display, fontSize: 13, color: C.darkInk }}>
+                {updating == null
+                  ? `Update available (v${update.versionName} build ${update.versionCode}). Tap to install.`
+                  : `Downloading update: ${Math.round(updating * 100)}%`}
+              </Text>
+              {updateError && (
+                <Text style={{ fontFamily: F.body, fontSize: 12, color: C.redPin, marginTop: 2 }}>
+                  {updateError}
+                </Text>
+              )}
             </DoodleCard>
           </Pressable>
         )}

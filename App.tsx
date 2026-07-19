@@ -13,6 +13,7 @@ import { Route } from './src/types';
 
 import DepositScreen from './src/screens/DepositScreen';
 import FriendCardScreen from './src/screens/FriendCardScreen';
+import FriendProfileScreen from './src/screens/FriendProfileScreen';
 import FriendsScreen from './src/screens/FriendsScreen';
 import HangoutDetailScreen from './src/screens/HangoutDetailScreen';
 import HangoutsScreen from './src/screens/HangoutsScreen';
@@ -31,6 +32,7 @@ function Screen({ route }: { route: Route }) {
     case 'yard': return <YardScreen />;
     case 'friends': return <FriendsScreen />;
     case 'friendCard': return <FriendCardScreen username={route.username} />;
+    case 'friendProfile': return <FriendProfileScreen username={route.username} />;
     case 'hangouts': return <HangoutsScreen />;
     case 'newHangout': return <NewHangoutScreen preselect={route.preselect} />;
     case 'hangoutDetail': return <HangoutDetailScreen hangoutId={route.hangoutId} />;
