@@ -127,6 +127,13 @@ a{color:inherit;text-decoration:none}
 }
 /* clip a thin slice off the bottom of the last row against the page edge */
 .mark span:last-child{margin-bottom:-.08em}
+/* one line on wider screens ("TOMO YARD" side by side) */
+@media (min-width:720px){
+  .mark{display:flex;justify-content:center;align-items:flex-end;gap:.5em;
+    white-space:nowrap;margin-bottom:-.9vw}
+  .mark span{font-size:min(14.5vw,12rem)}
+  .mark span:last-child{margin-bottom:0}
+}
 @media (max-width:460px){
   .foot-links{font-size:.78rem;gap:5px 11px;padding-bottom:16px}
 }
