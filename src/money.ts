@@ -3,7 +3,9 @@ export const USDC = 1_000_000;
 
 export function fmtUsd(units: string | number | undefined | null): string {
   if (units == null) return '$0';
-  const n = Number(units) / USDC;
+  // Floor to cents so we never show more than the user actually has.
+  const cents = Math.floor(Number(units) / (USDC / 100));
+  const n = cents / 100;
   // whole dollars show as $2, cents show as $1.50
   return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
 }

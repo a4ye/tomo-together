@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import QRCode from 'react-native-qrcode-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DoodleButton, DoodleCard } from '../components/Doodle';
 import OutlinedText from '../components/OutlinedText';
@@ -68,7 +69,7 @@ export default function DepositScreen() {
   const [withdrawalIntent, setWithdrawalIntent] = useState<WithdrawalIntent | null>(null);
   const withdrawalStorageKey = me ? `${WITHDRAWAL_INTENT_PREFIX}${me.username}` : null;
 
-  const loadWallet = () => api.wallet().then(setWallet).catch(() => {});
+  const loadWallet = () => api.wallet().then(setWallet).catch(() => setWallet({ enabled: false }));
   useEffect(() => { loadWallet(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -87,7 +88,7 @@ export default function DepositScreen() {
         const intent = { ...parsed, state: 'reconciling' as const };
         setWithdrawalIntent(intent);
         setCashOutAddr(intent.destination.recipient_address);
-        setWalletMsg('A previous cash-out still needs reconciliation. Retry it with the saved request.');
+        setWalletMsg("Your last cash-out didn't finish sending. Tap the button below to safely finish it.");
       } catch {
         AsyncStorage.removeItem(withdrawalStorageKey).catch(() => {});
       }
@@ -111,6 +112,7 @@ export default function DepositScreen() {
       const addr =
         list?.find((a) => a.chain_type === 'ethereum' && typeof a.address === 'string')?.address
         ?? null;
+      if (!addr) { setWalletMsg('Could not get a Base deposit address. Please try again.'); return; }
       setDepositAddr(addr);
     } catch (e) {
       setWalletMsg(e instanceof Error ? e.message : 'Could not get a deposit address');
@@ -132,6 +134,10 @@ export default function DepositScreen() {
   const cashOut = async () => {
     if (!withdrawalStorageKey) { setWalletMsg('Sign in before cashing out'); return; }
     if (!withdrawalIntent && !cashOutAddr.trim()) { setWalletMsg('Enter a wallet address'); return; }
+    if (!withdrawalIntent && !/^0x[0-9a-fA-F]{40}$/.test(cashOutAddr.trim())) {
+      setWalletMsg("That doesn't look like a wallet address — it should start with 0x and be 42 characters.");
+      return;
+    }
     setWalletBusy(true); setWalletMsg(null);
     let intent = withdrawalIntent;
     try {
@@ -167,7 +173,7 @@ export default function DepositScreen() {
         // updating its presentation state is best-effort.
         await AsyncStorage.setItem(withdrawalStorageKey, JSON.stringify(pendingIntent)).catch(() => {});
         setWithdrawalIntent(pendingIntent);
-        setWalletMsg('Cash-out is being reconciled. Retry this saved request in a moment.');
+        setWalletMsg("Your cash-out hasn't finished sending yet. Tap the button again in a moment to safely finish it.");
         return;
       }
       const cleared = await AsyncStorage.removeItem(withdrawalStorageKey)
@@ -188,7 +194,7 @@ export default function DepositScreen() {
         const pendingIntent = { ...intent, state: 'reconciling' as const };
         await AsyncStorage.setItem(withdrawalStorageKey, JSON.stringify(pendingIntent)).catch(() => {});
         setWithdrawalIntent(pendingIntent);
-        setWalletMsg('The result is not final yet. Retry this saved cash-out to reconcile it safely.');
+        setWalletMsg("We couldn't confirm your cash-out went through. Tap the button again to safely finish it.");
       } else {
         if (intent) {
           await AsyncStorage.removeItem(withdrawalStorageKey).catch(() => {});
@@ -235,8 +241,14 @@ export default function DepositScreen() {
                 <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.brown }}>
                   Send USDC (Base) to this address, then tap Refresh:
                 </Text>
-                <Text selectable style={{ fontFamily: F.body, fontSize: 12, color: C.darkInk, marginTop: 2 }}>
+                <View style={{ alignItems: 'center', marginTop: 8 }}>
+                  <QRCode value={depositAddr} size={160} color={C.darkInk} backgroundColor={C.white} />
+                </View>
+                <Text selectable style={{ fontFamily: F.body, fontSize: 12, color: C.darkInk, marginTop: 8 }}>
                   {depositAddr}
+                </Text>
+                <Text style={{ fontFamily: F.body, fontSize: 12, color: C.labelOrange, marginTop: 4 }}>
+                  Only USDC on the Base network — any other token or network will be lost.
                 </Text>
               </View>
             )}
@@ -261,7 +273,7 @@ export default function DepositScreen() {
                   label={walletBusy
                     ? 'Working'
                     : withdrawalIntent
-                      ? `Reconcile ${fmtUsd(withdrawalIntent.amountUnits)} cash-out`
+                      ? `Finish ${fmtUsd(withdrawalIntent.amountUnits)} cash-out`
                       : `Cash out ${fmtUsd(wallet.balanceUnits)}`}
                   seed={5} disabled={walletBusy || (!withdrawalIntent && !wallet.readyToCashOut)}
                   onPress={cashOut}
@@ -277,10 +289,31 @@ export default function DepositScreen() {
                   Cash out unlocks at {fmtUsd(wallet.cashoutThresholdUnits)} (batches the on-chain fee).
                 </Text>
               )}
+              {!!wallet.withdrawals?.length && (
+                <View style={{ marginTop: 8 }}>
+                  <Text style={{ fontFamily: F.display, fontSize: 12.5, color: C.brown }}>Past cash-outs</Text>
+                  {wallet.withdrawals.map((w) => (
+                    <Text key={w.id} style={{ fontFamily: F.body, fontSize: 12, color: C.fadedInk, marginTop: 2 }}>
+                      {fmtUsd(w.amountUnits)} — {w.status}
+                    </Text>
+                  ))}
+                </View>
+              )}
             </View>
             {walletMsg && (
               <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.brown, marginTop: 8 }}>{walletMsg}</Text>
             )}
+          </DoodleCard>
+        )}
+
+        {wallet && !wallet.enabled && (
+          <DoodleCard seed={2} bg={C.card} style={{ marginBottom: 12 }}>
+            <Text style={{ fontFamily: F.body, fontSize: 13, color: C.brown }}>
+              Your USDC wallet is unavailable right now.
+            </Text>
+            <View style={{ marginTop: 10 }}>
+              <DoodleButton label="Try again" size={13} seed={3} onPress={loadWallet} />
+            </View>
           </DoodleCard>
         )}
 
@@ -290,7 +323,7 @@ export default function DepositScreen() {
           </Text>
           <Text style={{ fontFamily: F.body, fontSize: 13.5, color: C.brown, marginTop: 6 }}>
             Stake USDC when you plan a hangout. Everyone who shows up gets their stake back;
-            whoever flakes loses theirs to the friends who came. Add funds or cash out above
+            whoever flakes loses theirs to the friends who came. Add funds or cash out
             anytime.
           </Text>
         </DoodleCard>

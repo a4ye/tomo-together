@@ -17,7 +17,7 @@ const {
 } = require('../scripts/auth0-legacy-migration');
 
 function temporaryWorkspace(t) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tomoyard-auth0-migration-'));
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tomoyard-auth0-migration-')));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   return directory;
 }

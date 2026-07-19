@@ -1019,6 +1019,55 @@ describe('HTTP endpoints (supertest)', () => {
     }
   });
 
+  test('deposit journey over HTTP: add-funds → on-chain arrival → refresh credits the balance', async () => {
+    const id = uid();
+    await registerHttp(id).expect(200);
+
+    // Realistic multi-chain provisioning (Solana entry FIRST): the client
+    // (DepositScreen) selects the entry with chain_type === 'ethereum'.
+    const origCreate = u.depositAddresses.create;
+    u.depositAddresses.create = async () => ({
+      data: [
+        { id: 'wallet_sol', chain_type: 'solana', address: 'So1anaDepositAddr11111111111111111111111111', is_primary: true, destination_chain_id: '8453' },
+        { id: 'wallet_evm', chain_type: 'ethereum', address: '0x1111111111111111111111111111111111111111', is_primary: false, destination_chain_id: '8453' },
+      ],
+    });
+    try {
+      const res = await api.post('/add-funds').send({ externalUserId: id });
+      assert.equal(res.status, 200);
+      assert.equal(res.body.treasuryAddress, '0xTREASURYADDR');
+      // The selection contract: an EVM address the client can pick IS present.
+      assert.ok(
+        res.body.depositAddresses.some(
+          (a: { chain_type?: string; address?: string }) =>
+            a.chain_type === 'ethereum' && a.address,
+        ),
+      );
+    } finally {
+      u.depositAddresses.create = origCreate;
+    }
+
+    // The user sends $4 USDC; Unifold reports one succeeded Base-USDC execution.
+    depositExecutions = [
+      {
+        id: `exec_journey_${id}`,
+        action_type: 'deposit',
+        status: 'succeeded',
+        recipient_address: '0xTREASURYADDR',
+        destination_chain_type: 'ethereum',
+        destination_chain_id: '8453',
+        destination_token_address: DEST.token_address,
+        destination_amount_base_unit: '4000000',
+      },
+    ];
+    const refreshed = await api.post('/deposits/refresh').send({ externalUserId: id });
+    assert.equal(refreshed.status, 200);
+    assert.equal(refreshed.body.creditedUnits, '4000000');
+
+    const usr = await getUserHttp(id);
+    assert.equal(usr.body.balanceUnits, '4000000');
+  });
+
   test('flake-tax flow end-to-end over HTTP', async () => {
     const host = uid();
     const a = uid();

@@ -88,22 +88,35 @@ const fakeCrypto = {
     if (state.settlementMode === 'invalid') {
       return { eventId: 'wrong-event', status: 'settled', forfeitPoolUnits: '0', results: [] };
     }
+    // Mirror the custody split: attendees reclaim their stake plus an equal
+    // share of the flakers' forfeits; with no attendees everyone is refunded.
+    const attendeeCount = BigInt(state.event.rsvps.filter((e) => e.status === 'attended').length);
+    const forfeitPool = attendeeCount === 0n
+      ? 0n
+      : BigInt(state.event.stakeUnits) * (BigInt(state.event.rsvps.length) - attendeeCount);
+    const share = attendeeCount === 0n ? 0n : forfeitPool / attendeeCount;
+    const remainder = attendeeCount === 0n ? 0n : forfeitPool % attendeeCount;
+    let attendeeIndex = 0n;
     return {
       eventId: state.event.id,
       status: 'settled',
-      forfeitPoolUnits: '0',
-      results: state.event.rsvps.map((entry) => ({
-        userId: entry.userId,
-        status: entry.status === 'attended' ? 'attended' : 'refunded',
-        stakedUnits: entry.stakedUnits,
-        payoutUnits: entry.stakedUnits,
-      })),
+      forfeitPoolUnits: String(forfeitPool),
+      results: state.event.rsvps.map((entry) => {
+        const base = { userId: entry.userId, stakedUnits: entry.stakedUnits };
+        if (attendeeCount === 0n) {
+          return { ...base, status: 'refunded', payoutUnits: entry.stakedUnits };
+        }
+        if (entry.status !== 'attended') return { ...base, status: 'flaked', payoutUnits: '0' };
+        const payout = BigInt(entry.stakedUnits) + share + (attendeeIndex < remainder ? 1n : 0n);
+        attendeeIndex += 1n;
+        return { ...base, status: 'attended', payoutUnits: String(payout) };
+      }),
     };
   },
   getWallet: async () => ({
     balanceUnits: '20000000',
     readyToCashOut: true,
-    cashoutThresholdUnits: '20000000',
+    cashoutThresholdUnits: '1000000',
     withdrawals: [],
   }),
   addFunds: async () => ({ ok: true }),
@@ -112,6 +125,18 @@ const fakeCrypto = {
     state.withdrawCalls.push({ amountUnits, destination, key });
     if (state.withdrawMode === 'conflict') {
       throw new CryptoError(409, 'key belongs to a different withdrawal', 'crypto_conflict');
+    }
+    if (state.withdrawMode === 'success') {
+      return {
+        status: 200,
+        data: {
+          ok: true,
+          withdrawalId: 'withdrawal-1',
+          transferId: 'ot_x',
+          status: 'completed',
+          balanceUnits: '0',
+        },
+      };
     }
     return {
       status: 202,
@@ -380,4 +405,95 @@ test('a bonus-day staked hangout stakes at 1x USDC while acorns keep the 2x', as
   const payouts = db.prepare(
     'SELECT payout_units FROM hangout_settlements WHERE hangout_id = ?').all(hangoutId);
   assert.deepEqual(payouts.map((row) => row.payout_units), ['2000000', '2000000']);
+});
+
+test('the wallet reports disabled without custody and passes custody fields through', async () => {
+  const wally = await register('wally');
+
+  state.ready = false;
+  const disabled = await request('/wallet', { token: wally });
+  assert.equal(disabled.status, 200);
+  assert.deepEqual(disabled.json, { enabled: false });
+
+  state.ready = true;
+  const wallet = await request('/wallet', { token: wally });
+  assert.equal(wallet.status, 200);
+  assert.equal(wallet.json.enabled, true);
+  assert.equal(wallet.json.balanceUnits, '20000000');
+  assert.equal(wallet.json.readyToCashOut, true);
+  assert.equal(wallet.json.cashoutThresholdUnits, '1000000');
+});
+
+test('a completed withdrawal returns 200 and forwards the Idempotency-Key', async () => {
+  const wanda = await register('wanda');
+  state.withdrawMode = 'success';
+  state.withdrawCalls = [];
+
+  const key = 'withdraw:wanda:stable-key-1';
+  const done = await request('/wallet/withdraw', {
+    method: 'POST', token: wanda,
+    headers: { 'Idempotency-Key': key },
+    body: {
+      amountUnits: '20000000',
+      destination: {
+        chain_type: 'ethereum', chain_id: '8453',
+        token_address: '0x0000000000000000000000000000000000000001',
+        recipient_address: '0x1111111111111111111111111111111111111111',
+      },
+    },
+  });
+  assert.equal(done.status, 200);
+  assert.equal(done.json.ok, true);
+  assert.equal(done.json.status, 'completed');
+  assert.equal(done.json.balanceUnits, '0');
+  assert.equal(state.withdrawCalls.length, 1);
+  assert.equal(state.withdrawCalls[0].key, key);
+});
+
+test('a flaker forfeits their stake to the friend who showed up', async () => {
+  const erin = await register('erin');
+  const frank = await register('frank');
+  assert.equal((await request('/friends/request', {
+    method: 'POST', token: erin, body: { username: 'frank' },
+  })).status, 200);
+  assert.equal((await request('/friends/accept', {
+    method: 'POST', token: frank, body: { username: 'erin' },
+  })).status, 200);
+
+  state.event = null;
+  state.rsvpCalls = 0;
+  state.checkinCalls = [];
+  state.settlementMode = 'valid';
+
+  const created = await request('/hangouts', {
+    method: 'POST', token: erin, body: {
+      activity: 'ramen',
+      date: new Date(Date.now() - 60_000).toISOString(),
+      place: 'Test cafe',
+      friendUsernames: ['frank'],
+      stakeUnits: '2000000',
+    },
+  });
+  assert.equal(created.status, 200);
+  const hangoutId = created.json.hangout.id;
+  assert.equal((await request(`/hangouts/${hangoutId}/stake`, { method: 'POST', token: erin })).status, 200);
+  assert.equal((await request(`/hangouts/${hangoutId}/stake`, { method: 'POST', token: frank })).status, 200);
+
+  // Only erin shows up: her photo is the sole attendance proof, no NFC taps.
+  const photoForm = new FormData();
+  photoForm.append('photo', new Blob(['proof'], { type: 'image/jpeg' }), 'proof.jpg');
+  assert.equal((await request(`/hangouts/${hangoutId}/photo`, {
+    method: 'POST', token: erin, body: photoForm,
+  })).status, 200);
+
+  const settled = await request(`/hangouts/${hangoutId}/end`, { method: 'POST', token: erin });
+  assert.equal(settled.status, 200);
+  assert.equal(settled.json.hangout.stake.settled, true);
+  const members = settled.json.hangout.stake.members;
+  const erinRow = members.find((m) => m.username === 'erin');
+  const frankRow = members.find((m) => m.username === 'frank');
+  assert.equal(erinRow.settleStatus, 'attended');
+  assert.equal(erinRow.payoutUnits, '4000000', 'her stake plus frank\'s forfeited stake');
+  assert.equal(frankRow.settleStatus, 'flaked');
+  assert.equal(frankRow.payoutUnits, '0');
 });

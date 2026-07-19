@@ -37,7 +37,10 @@ export default function HangoutDetailScreen({ hangoutId }: { hangoutId: number }
       const r = await api.stakeHangout(hangoutId);
       setH(r.hangout);
     } catch (e) {
-      setStakeMsg(e instanceof Error ? e.message : 'Could not stake');
+      const msg = e instanceof Error ? e.message : 'Could not stake';
+      setStakeMsg(/insufficient balance/i.test(msg)
+        ? "You don't have enough USDC for this stake. Add funds on the Deposit screen, then try again."
+        : msg);
     } finally {
       setBusy(false);
     }
@@ -164,7 +167,7 @@ export default function HangoutDetailScreen({ hangoutId }: { hangoutId: number }
                   const color = sm.settleStatus === 'flaked' ? C.redPin : C.labelGreen;
                   right = (
                     <Text style={{ fontFamily: F.display, fontSize: 13, color }}>
-                      {sm.settleStatus === 'flaked' ? 'flaked -' : '+'}{fmtUsd(sm.payoutUnits)}
+                      {sm.settleStatus === 'flaked' ? `flaked -${fmtUsd(h.stake!.stakeUnits)}` : `+${fmtUsd(sm.payoutUnits)}`}
                     </Text>
                   );
                 } else {
@@ -283,13 +286,14 @@ export default function HangoutDetailScreen({ hangoutId }: { hangoutId: number }
           <>
             <View style={{ marginTop: 16, marginBottom: 6 }}>
               <OutlinedText size={20} color={C.labelOrange} outline={C.white} thickness={2}>
-                Someone flake?
+                Wrap it up & pay out
               </OutlinedText>
             </View>
             <DoodleCard seed={19}>
               <Text style={{ fontFamily: F.body, fontSize: 13, color: C.brown, marginBottom: 8 }}>
-                You don't need everyone to tap. End it now and it wraps up with whoever
-                showed up{h.stake ? ', and the pool is split among them' : ''}. A friend
+                When you're done, end the hangout{h.stake
+                  ? " to pay everyone out. Anyone who came gets their stake back; a no-show's stake is split among the friends who showed"
+                  : ' and it wraps up with whoever showed up'}. A friend
                 counts as here once they've taken the photo or confirmed with someone.
               </Text>
               {h.members.map((m) => (

@@ -43,7 +43,10 @@ async function call<T>(
     res = await fetch(`${serverUrl}${path}`, { method, headers, body: payload, signal: abort.signal });
   } catch (e) {
     const timedOut = abort.signal.aborted;
-    const detail = timedOut ? ' (timed out)' : e instanceof Error ? ` (${e.message})` : '';
+    if (timedOut) {
+      throw new ApiError(0, 'The server is taking longer than usual. Please try again in a moment.');
+    }
+    const detail = e instanceof Error ? ` (${e.message})` : '';
     throw new ApiError(0, `Cannot reach the server. Check the server address and your connection.${detail}`);
   } finally {
     clearTimeout(timer);
