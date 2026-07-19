@@ -12,6 +12,8 @@ export type Me = PublicUser & {
   owned: string[];
 };
 
+export type TitleKind = 'stale' | 'streak' | 'best' | 'new' | 'close' | 'friend';
+
 export type FriendView = PublicUser & {
   birthday: string; // MM-DD
   vibe: number;
@@ -21,6 +23,8 @@ export type FriendView = PublicUser & {
   lastHangoutAt: string | null; // ISO, last completed hangout together
   recentHangouts: number; // completed together in the last 30 days
   streak: boolean; // recentHangouts >= 3
+  title: string; // short status, e.g. "Best friend" / "Need to hang out"
+  titleKind: TitleKind;
 };
 
 export type FriendCard = PublicUser & {
