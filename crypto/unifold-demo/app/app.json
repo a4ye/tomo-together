@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "Unifold Bank Demo",
+    "slug": "unifold-bank-demo",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": false,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.demo.unifoldbank"
+    },
+    "android": {
+      "package": "com.demo.unifoldbank"
+    }
+  }
+}
