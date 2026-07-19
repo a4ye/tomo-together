@@ -41,14 +41,22 @@ function Label({ children }: { children: string }) {
   );
 }
 
+function messageFor(error: unknown): string | null {
+  const code = typeof error === 'object' && error && 'code' in error
+    ? String((error as { code: unknown }).code)
+    : '';
+  if (code.includes('user_cancelled') || code === 'cancelled') return null;
+  return error instanceof Error ? error.message : 'Something went wrong';
+}
+
 export default function OnboardingScreen() {
-  const { signIn } = useSession();
+  const {
+    auth0Authenticated, authConfigurationError, completeProfile, signIn, signOut,
+  } = useSession();
   const insets = useSafeAreaInsets();
-  const [mode, setMode] = useState<'register' | 'login'>('register');
   const [username, setUsername] = useState('');
   const [name, setName] = useState('');
   const [bd, setBd] = useState({ y: '', m: '', d: '' });
-  const [password, setPassword] = useState('');
   const [color, setColor] = useState(COLORS[0]);
   const [species, setSpecies] = useState<string>('cat');
   const [interests, setInterests] = useState<string[]>([]);
@@ -56,34 +64,41 @@ export default function OnboardingScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // catalog is public; load it so the interest picker has the activity list
+  // The catalog is public, so new Auth0 users can choose interests while they
+  // finish the app-specific part of onboarding.
   useEffect(() => {
-    makeApi(DEFAULT_SERVER, null).catalog().then((r) => setActivities(r.activities)).catch(() => {});
+    makeApi(DEFAULT_SERVER, null).catalog()
+      .then((result) => setActivities(result.activities))
+      .catch(() => {});
   }, []);
 
-  const submit = async () => {
+  const authenticate = async () => {
     setError(null);
     setBusy(true);
-    const api = makeApi(DEFAULT_SERVER, null);
     try {
-      if (mode === 'register') {
-        const birthday = `${bd.y.padStart(4, '0')}-${bd.m.padStart(2, '0')}-${bd.d.padStart(2, '0')}`;
-        const res = await api.register({
-          username: username.trim().toLowerCase(),
-          name: name.trim(),
-          birthday,
-          password,
-          color,
-          species,
-          interests,
-        });
-        signIn(res.token, res.me);
-      } else {
-        const res = await api.login({ username: username.trim().toLowerCase(), password });
-        signIn(res.token, res.me);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong');
+      await signIn();
+    } catch (authError) {
+      setError(messageFor(authError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveProfile = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      const birthday = `${bd.y.padStart(4, '0')}-${bd.m.padStart(2, '0')}-${bd.d.padStart(2, '0')}`;
+      await completeProfile({
+        username: username.trim().toLowerCase(),
+        name: name.trim(),
+        birthday,
+        color,
+        species,
+        interests,
+      });
+    } catch (profileError) {
+      setError(messageFor(profileError));
     } finally {
       setBusy(false);
     }
@@ -107,126 +122,150 @@ export default function OnboardingScreen() {
           </Text>
         </View>
 
-        <DoodleCard seed={4}>
-          {/* mode toggle */}
-          <View style={{ flexDirection: 'row', marginBottom: 4 }}>
-            {(['register', 'login'] as const).map((m) => (
-              <Pressable key={m} onPress={() => setMode(m)} style={{ flex: 1 }}>
-                <View
-                  style={{
-                    paddingVertical: 8, alignItems: 'center', borderRadius: 6,
-                    marginHorizontal: 3,
-                    backgroundColor: mode === m ? C.yellow : C.white,
-                    borderWidth: 2.5, borderColor: mode === m ? C.brown : '#C89A62',
-                  }}
-                >
-                  <Text style={{ fontFamily: F.display, fontSize: 14, color: C.darkInk }}>
-                    {m === 'register' ? 'New here' : 'Sign in'}
-                  </Text>
-                </View>
-              </Pressable>
-            ))}
-          </View>
+        {!auth0Authenticated ? (
+          <DoodleCard seed={4}>
+            <Text style={{ fontFamily: F.display, fontSize: 20, color: C.darkInk, textAlign: 'center' }}>
+              Welcome to the yard
+            </Text>
+            <Text
+              style={{
+                fontFamily: F.body, fontSize: 14.5, lineHeight: 21, color: C.brown,
+                textAlign: 'center', marginTop: 8,
+              }}
+            >
+              Sign in securely to keep your friends, memories, and acorns with you.
+            </Text>
 
-          <Label>Username</Label>
-          <TextInput
-            value={username} onChangeText={setUsername} autoCapitalize="none"
-            placeholder="lowercase, letters and numbers" placeholderTextColor={C.fadedInk}
-            style={inputStyle}
-          />
+            {(error || authConfigurationError) && (
+              <Text style={{ fontFamily: F.body, fontSize: 13.5, color: C.redPin, marginTop: 12 }}>
+                {error || authConfigurationError}
+              </Text>
+            )}
 
-          {mode === 'register' && (
-            <>
-              <Label>Your name</Label>
-              <TextInput
-                value={name} onChangeText={setName}
-                placeholder="Shown to your friends" placeholderTextColor={C.fadedInk}
-                style={inputStyle}
+            <View style={{ marginTop: 18 }}>
+              <DoodleButton
+                label={busy ? 'Opening secure sign-in' : 'Continue securely'}
+                bg={C.yellow}
+                border={C.brown}
+                seed={9}
+                disabled={busy || Boolean(authConfigurationError)}
+                onPress={authenticate}
               />
-              <Label>Birthday</Label>
-              <View style={{ flexDirection: 'row' }}>
-                <TextInput
-                  value={bd.y} onChangeText={(y) => setBd((s) => ({ ...s, y }))}
-                  placeholder="YYYY" placeholderTextColor={C.fadedInk} keyboardType="number-pad"
-                  maxLength={4} style={[inputStyle, { flex: 1.4, marginRight: 6 }]}
-                />
-                <TextInput
-                  value={bd.m} onChangeText={(m) => setBd((s) => ({ ...s, m }))}
-                  placeholder="MM" placeholderTextColor={C.fadedInk} keyboardType="number-pad"
-                  maxLength={2} style={[inputStyle, { flex: 1, marginRight: 6 }]}
-                />
-                <TextInput
-                  value={bd.d} onChangeText={(d) => setBd((s) => ({ ...s, d }))}
-                  placeholder="DD" placeholderTextColor={C.fadedInk} keyboardType="number-pad"
-                  maxLength={2} style={[inputStyle, { flex: 1 }]}
-                />
-              </View>
-            </>
-          )}
+            </View>
+            <Text
+              style={{
+                fontFamily: F.body, fontSize: 11.5, color: C.fadedInk,
+                textAlign: 'center', marginTop: 10,
+              }}
+            >
+              Powered by Auth0 Universal Login
+            </Text>
+          </DoodleCard>
+        ) : (
+          <DoodleCard seed={4}>
+            <Text style={{ fontFamily: F.display, fontSize: 19, color: C.darkInk, textAlign: 'center' }}>
+              Make this yard yours
+            </Text>
+            <Text style={{ fontFamily: F.body, fontSize: 13.5, color: C.brown, textAlign: 'center', marginTop: 4 }}>
+              Your secure account is ready. Pick the details your friends will see.
+            </Text>
 
-          <Label>Password</Label>
-          <TextInput
-            value={password} onChangeText={setPassword} secureTextEntry
-            placeholder="At least 6 characters" placeholderTextColor={C.fadedInk}
-            style={inputStyle}
-          />
+            <Label>Username</Label>
+            <TextInput
+              value={username} onChangeText={setUsername} autoCapitalize="none"
+              autoCorrect={false} textContentType="username"
+              placeholder="lowercase, letters and numbers" placeholderTextColor={C.fadedInk}
+              style={inputStyle}
+            />
 
-          {mode === 'register' && (
-            <>
-              <Label>Your look</Label>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center' }}>
-                {SPECIES.map((s) => (
-                  <Pressable key={s} onPress={() => setSpecies(s)}>
+            <Label>Your name</Label>
+            <TextInput
+              value={name} onChangeText={setName}
+              placeholder="Shown to your friends" placeholderTextColor={C.fadedInk}
+              style={inputStyle}
+            />
+
+            <Label>Birthday</Label>
+            <View style={{ flexDirection: 'row' }}>
+              <TextInput
+                value={bd.y} onChangeText={(y) => setBd((state) => ({ ...state, y }))}
+                placeholder="YYYY" placeholderTextColor={C.fadedInk} keyboardType="number-pad"
+                maxLength={4} style={[inputStyle, { flex: 1.4, marginRight: 6 }]}
+              />
+              <TextInput
+                value={bd.m} onChangeText={(m) => setBd((state) => ({ ...state, m }))}
+                placeholder="MM" placeholderTextColor={C.fadedInk} keyboardType="number-pad"
+                maxLength={2} style={[inputStyle, { flex: 1, marginRight: 6 }]}
+              />
+              <TextInput
+                value={bd.d} onChangeText={(d) => setBd((state) => ({ ...state, d }))}
+                placeholder="DD" placeholderTextColor={C.fadedInk} keyboardType="number-pad"
+                maxLength={2} style={[inputStyle, { flex: 1 }]}
+              />
+            </View>
+
+            <Label>Your look</Label>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center' }}>
+              {SPECIES.map((candidate) => (
+                <Pressable key={candidate} onPress={() => setSpecies(candidate)}>
+                  <View
+                    style={{
+                      alignItems: 'center', margin: 3, padding: 4, borderRadius: 6,
+                      backgroundColor: species === candidate ? C.yellow : C.white,
+                      borderWidth: 2.5, borderColor: species === candidate ? C.brown : '#C89A62',
+                    }}
+                  >
+                    <Avatar color={color} species={candidate} size={52} />
+                  </View>
+                </Pressable>
+              ))}
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
+              <Avatar color={color} species={species} size={74} />
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', flex: 1, marginLeft: 10 }}>
+                {COLORS.map((candidate) => (
+                  <Pressable key={candidate} onPress={() => setColor(candidate)}>
                     <View
                       style={{
-                        alignItems: 'center', margin: 3, padding: 4, borderRadius: 6,
-                        backgroundColor: species === s ? C.yellow : C.white,
-                        borderWidth: 2.5, borderColor: species === s ? C.brown : '#C89A62',
+                        width: 34, height: 34, borderRadius: 6, margin: 4, backgroundColor: candidate,
+                        borderWidth: 3, borderColor: color === candidate ? C.darkInk : '#C89A62',
                       }}
-                    >
-                      <Avatar color={color} species={s} size={52} />
-                    </View>
+                    />
                   </Pressable>
                 ))}
               </View>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
-                <Avatar color={color} species={species} size={74} />
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', flex: 1, marginLeft: 10 }}>
-                  {COLORS.map((c) => (
-                    <Pressable key={c} onPress={() => setColor(c)}>
-                      <View
-                        style={{
-                          width: 34, height: 34, borderRadius: 6, margin: 4, backgroundColor: c,
-                          borderWidth: 3, borderColor: color === c ? C.darkInk : '#C89A62',
-                        }}
-                      />
-                    </Pressable>
-                  ))}
-                </View>
-              </View>
+            </View>
 
-              <Label>{`Your interests${interests.length > 0 ? ` (${interests.length})` : ''}`}</Label>
-              <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.fadedInk, marginBottom: 6 }}>
-                Pick a few. We'll suggest these kinds of hangouts first. You can change them later.
-              </Text>
-              <InterestPicker options={activities} value={interests} onChange={setInterests} />
-            </>
-          )}
-
-          {error && (
-            <Text style={{ fontFamily: F.body, fontSize: 13.5, color: C.redPin, marginTop: 10 }}>
-              {error}
+            <Label>{`Your interests${interests.length > 0 ? ` (${interests.length})` : ''}`}</Label>
+            <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.fadedInk, marginBottom: 6 }}>
+              Pick a few. We'll suggest these kinds of hangouts first. You can change them later.
             </Text>
-          )}
+            <InterestPicker options={activities} value={interests} onChange={setInterests} />
 
-          <View style={{ marginTop: 16 }}>
-            <DoodleButton
-              label={busy ? 'One moment' : mode === 'register' ? 'Start my yard' : 'Sign in'}
-              bg={C.yellow} border={C.brown} seed={9} disabled={busy}
-              onPress={submit}
-            />
-          </View>
-        </DoodleCard>
+            {error && (
+              <Text style={{ fontFamily: F.body, fontSize: 13.5, color: C.redPin, marginTop: 10 }}>
+                {error}
+              </Text>
+            )}
+
+            <View style={{ marginTop: 16 }}>
+              <DoodleButton
+                label={busy ? 'Planting your yard' : 'Start my yard'}
+                bg={C.yellow} border={C.brown} seed={9} disabled={busy}
+                onPress={saveProfile}
+              />
+            </View>
+            <Pressable
+              disabled={busy}
+              onPress={() => { signOut().catch((signOutError) => setError(messageFor(signOutError))); }}
+              style={{ alignItems: 'center', paddingTop: 14, paddingBottom: 2 }}
+            >
+              <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.fadedInk }}>
+                Use a different account
+              </Text>
+            </Pressable>
+          </DoodleCard>
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   );

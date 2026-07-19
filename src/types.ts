@@ -101,6 +101,23 @@ export type Wallet = {
   withdrawals?: { id: string; amountUnits: string; status: string }[];
 };
 
+export type WithdrawalDestination = {
+  chain_type: string;
+  chain_id: string;
+  token_address: string;
+  recipient_address: string;
+};
+
+export type WithdrawalResult = {
+  ok: boolean;
+  pending?: boolean;
+  withdrawalId?: string;
+  transferId?: string | null;
+  status?: string;
+  balanceUnits?: string;
+  error?: string;
+};
+
 export type Route =
   | { name: 'yard' }
   | { name: 'world' }

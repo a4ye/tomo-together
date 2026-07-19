@@ -18,24 +18,48 @@ type State = {
   players: Record<string, WorldPlayer>;
 };
 
-// Connects to the shared world at /ws, tracks everyone's live positions, and
-// exposes sendMove (throttled). Reconnects on drop.
-export function useWorldSocket(serverUrl: string, token: string | null) {
+export type WorldSocketTicketSource = () => Promise<string | null>;
+
+// Connects to the shared world at /ws with a short-lived, single-purpose
+// ticket. A fresh ticket is requested for every reconnect; API access tokens
+// are never exposed in the WebSocket URL.
+export function useWorldSocket(serverUrl: string, ticketSource: WorldSocketTicketSource) {
   const [state, setState] = useState<State>({
     connected: false, world: null, me: null, players: {},
   });
   const wsRef = useRef<WebSocket | null>(null);
   const lastSent = useRef(0);
-  const alive = useRef(true);
 
   useEffect(() => {
-    alive.current = true;
-    if (!token) return;
-    const wsUrl = `${serverUrl.replace(/^http/, 'ws')}/ws?token=${encodeURIComponent(token)}`;
+    let active = true;
     let retry: ReturnType<typeof setTimeout> | null = null;
 
-    const connect = () => {
-      if (!alive.current) return;
+    const scheduleReconnect = () => {
+      setState((current) => ({ ...current, connected: false }));
+      if (active && !retry) {
+        retry = setTimeout(() => {
+          retry = null;
+          void connect();
+        }, 1500);
+      }
+    };
+
+    const connect = async () => {
+      if (!active) return;
+      let ticket: string | null;
+      try {
+        ticket = await ticketSource();
+      } catch {
+        scheduleReconnect();
+        return;
+      }
+      if (!active) return;
+      if (!ticket) {
+        scheduleReconnect();
+        return;
+      }
+
+      const wsUrl = `${serverUrl.replace(/^http/, 'ws')}/ws?ticket=${encodeURIComponent(ticket)}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -65,21 +89,17 @@ export function useWorldSocket(serverUrl: string, token: string | null) {
           return s;
         });
       };
-      const reconnect = () => {
-        setState((s) => ({ ...s, connected: false }));
-        if (alive.current && !retry) retry = setTimeout(() => { retry = null; connect(); }, 1500);
-      };
-      ws.onclose = reconnect;
+      ws.onclose = scheduleReconnect;
       ws.onerror = () => { try { ws.close(); } catch {} };
     };
-    connect();
+    void connect();
 
     return () => {
-      alive.current = false;
+      active = false;
       if (retry) clearTimeout(retry);
       try { wsRef.current?.close(); } catch {}
     };
-  }, [serverUrl, token]);
+  }, [serverUrl, ticketSource]);
 
   // Stable across renders (uses only refs) so the movement loop's interval is
   // not torn down and recreated on every socket message.

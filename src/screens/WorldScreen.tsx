@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated, Image, PanResponder, Pressable, Text, useWindowDimensions, View,
 } from 'react-native';
@@ -141,11 +141,18 @@ function Joystick({ vecRef, style }: { vecRef: React.MutableRefObject<{ x: numbe
 }
 
 export default function WorldScreen() {
-  const { serverUrl, token, me } = useSession();
+  const { serverUrl, api, me } = useSession();
   const nav = useNav();
   const insets = useSafeAreaInsets();
   const { width: sw, height: sh } = useWindowDimensions();
-  const { world, me: myUsername, players, connected, sendMove } = useWorldSocket(serverUrl, token);
+  const ticketSource = useCallback(async () => {
+    const { ticket } = await api.worldWsTicket();
+    return ticket;
+  }, [api]);
+  const { world, me: myUsername, players, connected, sendMove } = useWorldSocket(
+    serverUrl,
+    ticketSource,
+  );
 
   const vec = useRef({ x: 0, y: 0 });
   const pos = useRef({ x: 0, y: 0 });

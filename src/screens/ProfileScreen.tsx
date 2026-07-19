@@ -1,5 +1,5 @@
 import * as Application from 'expo-application';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AcornPill from '../components/Acorn';
@@ -26,13 +26,34 @@ export default function ProfileScreen() {
   const { me, signOut, api } = useSession();
   const nav = useNav();
   const insets = useSafeAreaInsets();
+  const [signingOut, setSigningOut] = useState(false);
+  const [signOutError, setSignOutError] = useState<string | null>(null);
+  const signOutInFlight = useRef(false);
   const [labels, setLabels] = useState<Record<string, string>>({});
 
   useEffect(() => {
     api.catalog()
-      .then((r) => setLabels(Object.fromEntries(r.activities.map((a: Activity) => [a.id, a.label]))))
+      .then((result) => setLabels(Object.fromEntries(
+        result.activities.map((activity: Activity) => [activity.id, activity.label]),
+      )))
       .catch(() => {});
   }, [api]);
+
+  const handleSignOut = useCallback(async () => {
+    if (signOutInFlight.current) return;
+    signOutInFlight.current = true;
+    setSigningOut(true);
+    setSignOutError(null);
+    try {
+      await signOut();
+      nav.home();
+    } catch {
+      setSignOutError('Could not sign out. Check your connection and try again.');
+    } finally {
+      signOutInFlight.current = false;
+      setSigningOut(false);
+    }
+  }, [nav, signOut]);
 
   if (!me) return null;
 
@@ -92,15 +113,27 @@ export default function ProfileScreen() {
 
         <View style={{ marginTop: 16 }}>
           <DoodleButton
-            label="Sign out"
+            label={signingOut ? 'Signing out…' : 'Sign out'}
             seed={13}
             border={C.redPin}
             color={C.redPin}
-            onPress={() => {
-              signOut();
-              nav.home();
-            }}
+            disabled={signingOut}
+            onPress={() => { void handleSignOut(); }}
           />
+          {signOutError ? (
+            <Text
+              accessibilityLiveRegion="polite"
+              style={{
+                fontFamily: F.body,
+                fontSize: 13.5,
+                color: C.redPin,
+                marginTop: 8,
+                textAlign: 'center',
+              }}
+            >
+              {signOutError}
+            </Text>
+          ) : null}
         </View>
       </ScrollView>
     </View>

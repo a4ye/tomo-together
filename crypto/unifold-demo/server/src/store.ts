@@ -9,7 +9,9 @@ import {
   openSync,
   fsyncSync,
   closeSync,
+  unlinkSync,
 } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CREDIT_LIMIT_UNITS } from './config.js';
@@ -52,7 +54,7 @@ const users = new Map<string, User>();
 // never sees a truncated file even if we're OOM-killed/redeployed mid-write.
 function atomicWrite(file: string, data: string): void {
   mkdirSync(DATA_DIR, { recursive: true });
-  const tmp = `${file}.tmp`;
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   const fd = openSync(tmp, 'w');
   try {
     writeFileSync(fd, data, 'utf8');
@@ -60,7 +62,19 @@ function atomicWrite(file: string, data: string): void {
   } finally {
     closeSync(fd);
   }
-  renameSync(tmp, file);
+  try {
+    renameSync(tmp, file);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (process.platform !== 'win32' || (code !== 'EPERM' && code !== 'EEXIST')) {
+      throw error;
+    }
+    // Windows rename does not consistently replace an existing destination.
+    // This backend is explicitly local/test-only; remove the exact ledger file
+    // and finish the replacement. Production uses MongoDB transactions.
+    if (existsSync(file)) unlinkSync(file);
+    renameSync(tmp, file);
+  }
 }
 
 function load(): void {
@@ -97,8 +111,6 @@ function load(): void {
 function persist(): void {
   atomicWrite(DATA_FILE, JSON.stringify([...users.values()], null, 2));
 }
-
-load();
 
 export function registerUser(externalUserId: string): User {
   let user = users.get(externalUserId);
@@ -275,7 +287,19 @@ function persistEvents(): void {
   atomicWrite(EVENTS_FILE, JSON.stringify([...events.values()], null, 2));
 }
 
-loadEvents();
+let initialized = false;
+
+/**
+ * Load the legacy JSON ledger only after the runtime explicitly selects the
+ * local/test backend. Importing shared types in a MongoDB production process
+ * must never touch local ledger files.
+ */
+export function initializeJsonStore(): void {
+  if (initialized) return;
+  load();
+  loadEvents();
+  initialized = true;
+}
 
 export function createEvent(ev: EventItem): EventItem {
   events.set(ev.id, ev);

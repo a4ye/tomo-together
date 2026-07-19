@@ -4,17 +4,20 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
+    "dev": "node --env-file-if-exists=.env --import tsx --watch src/index.ts",
+    "start": "node --env-file-if-exists=.env dist/index.js",
+    "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "tsc --noEmit false --outDir dist",
     "typecheck": "tsc --noEmit",
     "check": "node --env-file-if-exists=.env --import tsx scripts/check.ts",
     "setup:webhook": "node --env-file-if-exists=.env --import tsx scripts/setup-webhook.ts",
-    "pretest": "rm -rf .data-test",
-    "test": "node --env-file=test/.env.test --import tsx --test test/backend.test.ts"
+    "pretest": "node -e \"require('node:fs').rmSync('.data-test',{recursive:true,force:true})\"",
+    "test": "node --import ./test/setup-env.mjs --import tsx --test --test-concurrency=1 \"test/*.test.ts\" \"src/*.test.ts\""
   },
   "dependencies": {
-    "@unifold/node": "*",
+    "@unifold/node": "0.5.0",
     "express": "^4.19.2",
+    "mongodb": "7.5.0",
     "viem": "^2.21.0"
   },
   "devDependencies": {

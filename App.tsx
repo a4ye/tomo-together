@@ -6,6 +6,8 @@ import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useRef } from 'react';
 import { Animated, AppState, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { AuthProvider } from './src/auth';
+import BackgroundMusic from './src/components/BackgroundMusic';
 import YardBackground from './src/components/YardBackground';
 import { ensureNotifPermission, staleUsernameFromResponse, syncStaleReminders } from './src/notifications';
 import { NavProvider, useNav } from './src/state/nav';
@@ -117,11 +119,11 @@ function Navigator() {
 }
 
 function Root() {
-  const { ready, token, me } = useSession();
+  const { ready, authenticated, me } = useSession();
   if (!ready) {
     return <YardBackground bg={C.tan} tint={C.tanPaw} />;
   }
-  if (!token || !me) {
+  if (!authenticated || !me) {
     return <OnboardingScreen />;
   }
   return (
@@ -145,10 +147,14 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <SessionProvider>
-        <StatusBar style="dark" />
-        <Root />
-      </SessionProvider>
+      <AuthProvider>
+        <SessionProvider>
+          <StatusBar style="dark" />
+          <BackgroundMusic>
+            <Root />
+          </BackgroundMusic>
+        </SessionProvider>
+      </AuthProvider>
     </SafeAreaProvider>
   );
 }

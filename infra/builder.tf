@@ -68,8 +68,8 @@ resource "azurerm_linux_virtual_machine" "builder" {
   # 48 vCPU is the hard max without a quota request: the regional limit is 65
   # and 2 cores are permanently consumed elsewhere on this subscription, so
   # D64 (64+2=66) is rejected. Ephemeral start/deallocate keeps cost at cents.
-  size                = "Standard_D48as_v6"
-  admin_username      = "azureuser"
+  size           = "Standard_D48as_v6"
+  admin_username = "azureuser"
 
   network_interface_ids = [azurerm_network_interface.builder.id]
 
@@ -92,6 +92,12 @@ resource "azurerm_linux_virtual_machine" "builder" {
   }
 
   custom_data = filebase64("${path.module}/builder-init.yml")
+
+  # Cloud-init is bootstrap-only. Keep the current file for newly created VMs,
+  # but do not replace the persistent, cache-warmed builder when it changes.
+  lifecycle {
+    ignore_changes = [custom_data]
+  }
 }
 
 output "builder_ip" {

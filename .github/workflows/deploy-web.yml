@@ -10,7 +10,9 @@ on:
       - "assets/**"
       - "App.tsx"
       - "index.ts"
+      - "app.config.ts"
       - "app.json"
+      - "plugins/**"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/deploy-web.yml"
@@ -23,6 +25,12 @@ concurrency:
 jobs:
   export:
     runs-on: ubuntu-latest
+    env:
+      # Expo inlines these public Auth0 identifiers into the web bundle.
+      EXPO_PUBLIC_AUTH0_DOMAIN: ${{ vars.EXPO_PUBLIC_AUTH0_DOMAIN }}
+      EXPO_PUBLIC_AUTH0_CLIENT_ID: ${{ vars.EXPO_PUBLIC_AUTH0_CLIENT_ID }}
+      EXPO_PUBLIC_AUTH0_WEB_CLIENT_ID: ${{ vars.EXPO_PUBLIC_AUTH0_WEB_CLIENT_ID }}
+      EXPO_PUBLIC_AUTH0_AUDIENCE: ${{ vars.EXPO_PUBLIC_AUTH0_AUDIENCE }}
     steps:
       - uses: actions/checkout@v4
 
@@ -33,8 +41,18 @@ jobs:
 
       - run: npm ci
 
+      - name: Validate public Auth0 build configuration
+        shell: bash
+        run: |
+          : "${EXPO_PUBLIC_AUTH0_DOMAIN:?Set the EXPO_PUBLIC_AUTH0_DOMAIN Actions variable}"
+          : "${EXPO_PUBLIC_AUTH0_CLIENT_ID:?Set the EXPO_PUBLIC_AUTH0_CLIENT_ID Actions variable}"
+          : "${EXPO_PUBLIC_AUTH0_WEB_CLIENT_ID:?Set the EXPO_PUBLIC_AUTH0_WEB_CLIENT_ID Actions variable}"
+          : "${EXPO_PUBLIC_AUTH0_AUDIENCE:?Set the EXPO_PUBLIC_AUTH0_AUDIENCE Actions variable}"
+
       - name: Export react-native-web build
-        run: npx expo export --platform web --output-dir dist
+        # EXPO_PUBLIC_* substitutions are Metro transforms, so clear the
+        # persistent transform cache whenever producing a deployment bundle.
+        run: npx expo export --clear --platform web --output-dir dist
 
       - name: Zip export
         run: cd dist && zip -qr ../web.zip .

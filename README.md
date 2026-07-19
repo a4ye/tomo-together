@@ -1,89 +1,116 @@
 # Tomo Yard
 
-A cozy pixel-art friends app: real accounts, real hangouts, real proof you showed up.
-React Native (Expo) Android app + a small self-hosted server.
+A cozy pixel-art friends app: real accounts, real hangouts, and real proof you
+showed up. It ships as an Expo/React Native Android app and web build backed by a
+small Express API.
 
-UI styling uses the Sprout Lands UI Pack (Basic) by Cup Nooble: sprite panels, buttons,
-icons, and pixel font in `assets/ui` and `assets/fonts`. Its license is free for
-non-commercial use only, no redistribution. If this app ever goes commercial, buy the
-Premium pack or replace those assets.
+UI styling uses the Sprout Lands UI Pack (Basic) by Cup Nooble: sprite panels,
+buttons, icons, and pixel font in `assets/ui` and `assets/fonts`. Its license is
+free for non-commercial use only, with no redistribution. Replace or license those
+assets before commercial use.
 
 ## How it works
 
-- **Profiles**: first launch asks for username, name, birthday, password, and your blob avatar color.
-- **Friends by username**: search, send a request, they accept. Your friends wander your grass field wearing whatever their avatar has equipped.
-- **Hangouts**: pick who is coming, then a Beli-style duel ("Which sounds better?") narrows down the activity from everyone's learned tastes. Every pick tunes your preference weights on the server.
-- **Proof**: after the hangout, someone takes the photo, and every pair of attendees taps phones (NFC). One phone shows a tap code over HCE, the other scans it. When the photo is in and all pairs have tapped, the hangout is complete.
-- **Memory Book**: completed hangouts become pinned polaroids.
-- **Vibe**: each confirmed pair gains vibe for that friendship. Holidays and attendee birthdays pay x2. Leveling up a friendship pays both people acorns.
-- **Acorns + Wardrobe**: buy hats, glasses, scarves for your avatar with acorns.
-- **Leaderboard**: most completed hangouts this month among you and your friends.
-- **Wallet + staking (real USDC)**: the Deposit screen shows your real USDC balance (Unifold treasury on Base), with add-funds and cash-out. Hangouts can carry a stake — everyone puts in, no-shows lose theirs to the friends who showed. See "Crypto staking" below. The monthly-goal card is a labeled "coming soon" preview; the wallet and per-hangout staking are live.
+- **Accounts:** Auth0 Universal Login with a Native PKCE client, SPA client, and
+  RS256 access-token validation on the API. A temporary legacy-auth flag supports
+  migration of the five pre-Auth0 accounts.
+- **Profiles and friends:** pick a username and avatar, search by username, send a
+  request, and see equipped friends wandering through the yard.
+- **Hangouts:** invite friends and use pairwise choices to narrow down an activity.
+  Every pick tunes preference weights on the server.
+- **Proof:** upload a photo and confirm every attendee pair by NFC. Completed
+  hangouts become Memory Book polaroids and increase friendship vibe.
+- **Acorns and wardrobe:** earn acorns through friendship levels and spend them on
+  avatar items.
+- **Wallet and staking:** the separately gated crypto service uses Unifold
+  treasury custody for Base USDC and MongoDB Atlas for durable ledger,
+  withdrawal, event, and idempotency state. Hangout no-shows can forfeit a stake
+  to attendees. This moves real value when enabled.
+- **Music:** `Tomo Yard.mp3` loops quietly while the app is active. The global
+  Music on/off control persists the preference. Web playback starts after the
+  first user gesture because browsers block unsolicited autoplay.
 
-## Hosting
+## Production
 
-Production lives at **https://ht6.icinoxis.net** (Azure App Service B1, Cloudflare DNS,
-managed TLS). The Express server hosts the API, the animated homepage
-(`server/public/`), and the APK download at `/apk`.
+- Main API and marketing site: <https://ht6.icinoxis.net>
+- Expo web app: <https://ht6-app.icinoxis.net>
+- APK download: <https://ht6.icinoxis.net/apk>
+- Main Azure App Service: `ht6-tomoyard`
+- Crypto Azure App Service: `ht6-tomoyard-crypto`
+- Atlas database: `ht6_crypto` on the dedicated `tomo-yard` cluster
 
-- Infra is Terraform: `cd infra && terraform apply` (auth: `az login`,
-  `ARM_SUBSCRIPTION_ID`, `CLOUDFLARE_API_TOKEN` env vars; state is local).
-- CI/CD on push to `main`: `.github/workflows/deploy-server.yml` deploys the
-  server + homepage; `.github/workflows/build-apk.yml` builds a signed release
-  APK and uploads it to the App Service (`/home/data/apk/`), where `/apk` serves it.
-- CI secrets: `AZURE_WEBAPP_PUBLISH_PROFILE`, `KUDU_USER`, `KUDU_PASS`,
-  `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD` (keystore:
-  `ht6-upload-key.jks`, gitignored — do not lose it, APK updates must keep the same signature).
+Terraform in `infra/` manages Azure and Cloudflare. External crypto credentials
+live in Azure Key Vault `ht6tomoyardkv4831`; no secret value belongs in Terraform,
+Git, an `EXPO_PUBLIC_*` variable, or chat. The crypto feature is enabled only when
+Terraform's `crypto_enabled` input adds `CRYPTO_API_URL` to the main service. Keep
+that input `false` until the crypto deployment passes `/ready` and the non-monetary
+acceptance checks.
 
-## Run the server locally
+Read [the production runbook](docs/production-setup.md) before applying
+infrastructure, rotating credentials, enabling crypto, or migrating legacy users.
+It contains the exact Auth0 public identifiers, Atlas inventory, Key Vault secret
+names, two-phase deployment, checks, rollback, and rotation procedures.
+
+CI/CD on push to `main` uses:
+
+- `.github/workflows/deploy-server.yml` for the main API and marketing site;
+- `.github/workflows/deploy-web.yml` for the Expo web build;
+- `.github/workflows/build-apk.yml` for the signed Android APK; and
+- `.github/workflows/deploy-crypto.yml` for the separately tested crypto service.
+
+The crypto workflow needs `AZURE_CRYPTO_WEBAPP_PUBLISH_PROFILE`. APK signing needs
+`ANDROID_KEYSTORE_BASE64` and `ANDROID_KEYSTORE_PASSWORD`; preserve the original
+keystore because APK updates must keep the same signature. The four
+`EXPO_PUBLIC_AUTH0_*` entries are public GitHub Actions variables, not secrets.
+
+## Run locally
+
+Main API:
 
 ```bash
 cd server
 npm install
-node index.js        # listens on :4000, SQLite in server/data/
+npm test
+node index.js
 ```
 
-The app always talks to `https://ht6.icinoxis.net` (`DEFAULT_SERVER` in
-`src/state/session.tsx` — change it there for local development against
-`http://<your-ip>:4000`). There is no in-app server picker.
+Crypto service:
 
-## Crypto staking (flake-tax hangouts)
+```bash
+cd crypto/unifold-demo/server
+npm install
+cp .env.example .env
+# Fill the local ignored file; use CRYPTO_STORE_BACKEND=json only for local development.
+npm test
+npm start
+```
 
-Optional real-USDC staking on hangouts, gated on the main server's
-`CRYPTO_API_URL`. When set, a hangout can carry a stake: everyone puts in USDC,
-attendance is proven by the existing photo + phone-tap confirm, and on settle the
-no-shows' stakes are split among the friends who came. When `CRYPTO_API_URL` is
-unset (the current production deploy), staking simply does not appear and the app
-is unchanged.
+Start the main API with `CRYPTO_API_URL=http://localhost:8787` and the same
+32-or-more-character `CRYPTO_SERVICE_TOKEN` on both processes. Production refuses
+the JSON store and requires Atlas.
 
-- Money runs on **Unifold** treasury-custody (Base/USDC), implemented in
-  `crypto/unifold-demo/server`. `server/crypto.js` is a thin proxy from the Tomo
-  Yard server to it, mapping username → `ty_<username>`.
-- Run it: `cd crypto/unifold-demo/server && npm install && cp .env.example .env`
-  (fill `UNIFOLD_SECRET_KEY`, `TREASURY_ACCOUNT_ID`), then `npm start` (:8787).
-  Start the main server with `CRYPTO_API_URL=http://localhost:8787`.
-- **Secrets never enter this repo.** The Unifold `sk_live_…` key lives only in
-  `crypto/unifold-demo/server/.env` (gitignored). For production it must be a
-  server-side env var on wherever the crypto service is hosted.
-- New users get a 4-USDC/month grant to play with; real deposits/withdrawals move
-  actual USDC at the edges (Deposit screen → Add funds / Cash out).
+The product cash-out minimum is 20 USDC (`20000000` base units). A withdrawal's
+`Idempotency-Key` and exact payload must be reused after an uncertain response;
+generating a fresh key can represent a new money operation. Automatic real-USDC
+grants, raw balance adjustments, and treasury-funded event bonuses are disabled in
+production unless their exact dangerous opt-in is set to `true`.
 
 ## Build the app
 
 ```bash
 npm install
-npx expo run:android            # dev build (regenerates android/ via prebuild)
+npx expo run:android
 ```
 
-The NFC pieces (HCE service, TomoHce bridge module, manifest entries, release
-signing) are generated by the local config plugin `plugins/withTomoHce.js`, so
-`npx expo prebuild` is safe — `android/` is disposable and gitignored.
-Release APKs are built by CI; grab the latest from https://ht6.icinoxis.net/apk.
+The NFC pieces (HCE service, TomoHce bridge module, manifest entries, and release
+signing) are generated by `plugins/withTomoHce.js`, so `npx expo prebuild` can
+regenerate the ignored `android/` directory. Auth0's native module and custom URI
+scheme require a development or standalone build; do not use Expo Go for the OAuth
+callback test.
 
 ## NFC notes
 
-- Scan side uses react-native-nfc-manager (IsoDep, custom AID `F0544F4D4F31`).
-- Show side is a custom HostApduService (`HceService.kt`, generated into the
-  native project by `plugins/withTomoHce.js`).
-- Phones without NFC see a clear message; taps can only be confirmed on NFC hardware.
-- The emulator has no NFC. The server API path was verified directly; the radio exchange needs two real phones.
+- Scan uses `react-native-nfc-manager` with IsoDep and AID `F0544F4D4F31`.
+- Show uses a custom generated Android `HostApduService`.
+- Phones without NFC get a clear message, and the emulator has no NFC radio.
+- The radio exchange still needs two physical phones even when API paths pass.

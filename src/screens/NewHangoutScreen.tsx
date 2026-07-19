@@ -409,8 +409,8 @@ export default function NewHangoutScreen({ preselect }: { preselect?: string }) 
                 </View>
                 {stakeUnits && (
                   <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.brown, marginTop: 6 }}>
-                    Everyone puts in {fmtUsd(stakeUnits)}. Show up to get it back — whoever flakes loses
-                    their stake to the friends who came.
+                    Everyone puts in {fmtUsd(stakeUnits)}. After creating, tap Stake to fund your spot.
+                    Show up to get it back — whoever flakes loses their stake to the friends who came.
                   </Text>
                 )}
               </>

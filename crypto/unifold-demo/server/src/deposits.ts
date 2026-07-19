@@ -1,49 +1,89 @@
-// Poll-based deposit credit. After /add-funds hands the user a deposit address,
-// they send USDC (e.g. from Coinbase, on Base). Unifold records the arrival as a
-// "direct execution"; this polls those and credits the user's balance — no webhook
-// / public URL needed. Crediting reuses adjust() with a per-execution reference,
-// so it's idempotent (a deposit is never counted twice, no matter how often you poll).
+// Poll-based deposit credit. This is the fallback for delayed/missed webhooks.
+// Every execution is bound to the same treasury/Base-USDC tuple as /add-funds,
+// and every page is scanned so an older uncredited deposit cannot be stranded.
+import type { DirectExecution } from '@unifold/node';
 import { unifold } from './unifold.js';
 import { adjust } from './adjust.js';
-import { getUser } from './store.js';
-import { ValidationError } from './withdraw.js';
-import { CHAIN_ID } from './config.js';
+import { getStore } from './runtimeStore.js';
+import { ValidationError, isPositiveIntString } from './withdraw.js';
+import {
+  CHAIN_ID,
+  TREASURY_ACCOUNT_ID,
+  USDC_BASE_TOKEN_ADDRESS,
+} from './config.js';
+
+function sameAddress(left: string, right: string): boolean {
+  return left.toLowerCase() === right.toLowerCase();
+}
+
+function ownedDeposit(
+  execution: DirectExecution,
+  treasuryAddress: string,
+): boolean {
+  return (
+    execution.action_type === 'deposit' &&
+    execution.status === 'succeeded' &&
+    execution.destination_chain_type === 'ethereum' &&
+    execution.destination_chain_id === String(CHAIN_ID) &&
+    sameAddress(execution.destination_token_address, USDC_BASE_TOKEN_ADDRESS) &&
+    sameAddress(execution.recipient_address, treasuryAddress)
+  );
+}
 
 export async function refreshDeposits(externalUserId: string): Promise<{
   creditedUnits: string;
   newDeposits: Array<{ id: string; amountUnits: string }>;
   balanceUnits: string;
 }> {
-  const user = getUser(externalUserId);
+  const store = getStore();
+  const user = await store.getUser(externalUserId);
   if (!user) throw new ValidationError('user not found');
 
-  // Cast: this is an external poll; we only rely on a few documented fields.
-  const list = (await (unifold as any).directExecutions.list({
-    external_user_id: externalUserId,
-    status: 'succeeded',
-    limit: 50,
-  })) as { data?: Array<Record<string, unknown>> };
-
+  const treasury = await unifold.treasury.accounts.retrieve(TREASURY_ACCOUNT_ID);
   let creditedTotal = 0n;
   const newDeposits: Array<{ id: string; amountUnits: string }> = [];
+  let startingAfter: string | undefined;
 
-  for (const ex of list.data ?? []) {
-    // Only credit USDC-on-Base deposits — that's what /add-funds routes to.
-    if (String(ex.destination_chain_id) !== String(CHAIN_ID)) continue;
-    const amount = ex.destination_amount_base_unit;
-    if (typeof amount !== 'string' || !/^[0-9]+$/.test(amount) || BigInt(amount) <= 0n) continue;
+  for (;;) {
+    const page = await unifold.directExecutions.list({
+      external_user_id: externalUserId,
+      action_type: 'deposit',
+      status: 'succeeded',
+      limit: 100,
+      ...(startingAfter ? { starting_after: startingAfter } : {}),
+    });
 
-    const ref = `deposit:${String(ex.id)}`;
-    const r = adjust(externalUserId, amount, ref); // idempotent via reference
-    if (!r.alreadyApplied && BigInt(r.appliedUnits) > 0n) {
-      creditedTotal += BigInt(r.appliedUnits);
-      newDeposits.push({ id: String(ex.id), amountUnits: amount });
+    for (const execution of page.data) {
+      if (!ownedDeposit(execution, treasury.address)) continue;
+      const amount = execution.destination_amount_base_unit;
+      if (!isPositiveIntString(amount)) continue;
+      if (typeof execution.id !== 'string' || execution.id.trim() === '') continue;
+
+      const result = await adjust(
+        externalUserId,
+        amount,
+        `deposit:${execution.id}`,
+      );
+      if (!result.alreadyApplied && BigInt(result.appliedUnits) > 0n) {
+        creditedTotal += BigInt(result.appliedUnits);
+        newDeposits.push({ id: execution.id, amountUnits: amount });
+      }
     }
+
+    if (!page.has_more) break;
+    const nextCursor = page.data.at(-1)?.id;
+    if (!nextCursor || nextCursor === startingAfter) {
+      throw new Error('Unifold deposit pagination did not advance');
+    }
+    startingAfter = nextCursor;
   }
+
+  const updated = await store.getUser(externalUserId);
+  if (!updated) throw new ValidationError('user not found');
 
   return {
     creditedUnits: creditedTotal.toString(),
     newDeposits,
-    balanceUnits: getUser(externalUserId)!.balanceUnits,
+    balanceUnits: updated.balanceUnits,
   };
 }
