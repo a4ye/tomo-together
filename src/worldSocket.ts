@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type WorldPlayer = {
   username: string;
@@ -81,14 +81,16 @@ export function useWorldSocket(serverUrl: string, token: string | null) {
     };
   }, [serverUrl, token]);
 
-  const sendMove = (x: number, y: number) => {
+  // Stable across renders (uses only refs) so the movement loop's interval is
+  // not torn down and recreated on every socket message.
+  const sendMove = useCallback((x: number, y: number) => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== 1) return;
     const now = Date.now();
     if (now - lastSent.current < 60) return; // ~16/s
     lastSent.current = now;
     ws.send(JSON.stringify({ type: 'move', x: Math.round(x), y: Math.round(y) }));
-  };
+  }, []);
 
   return { ...state, sendMove };
 }
