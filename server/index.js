@@ -164,6 +164,12 @@ app.get('/apk', (_req, res) => {
   if (!fs.existsSync(apk)) return res.status(404).json({ error: 'APK not built yet' });
   res.download(apk, 'tomo-yard.apk');
 });
+// Version metadata for the in-app updater; CI writes version.json with the APK.
+app.get('/apk/version', (_req, res) => {
+  const f = path.join(DATA_DIR, 'apk', 'version.json');
+  if (!fs.existsSync(f)) return res.status(404).json({ error: 'No version info yet' });
+  res.type('json').send(fs.readFileSync(f, 'utf8'));
+});
 
 const upload = multer({
   storage: multer.diskStorage({
