@@ -108,6 +108,15 @@ const ITEMS = [
   { id: 'sunglasses', name: 'Sunglasses', price: 55 },
   { id: 'scarf', name: 'Scarf', price: 45 },
   { id: 'bowtie', name: 'Bow Tie', price: 40 },
+  // Mascots reuse the same owned/buy machinery as accessories above; a
+  // price of 0 means every account starts with it unlocked (see the
+  // `price === 0` check on the client instead of a migration/seed step).
+  { id: 'kitty_cream', name: 'Cream Kitty', price: 0, type: 'mascot' },
+  { id: 'kitty_tabby', name: 'Tabby Kitty', price: 40, type: 'mascot' },
+  { id: 'cat_black', name: 'Black Cat', price: 50, type: 'mascot' },
+  { id: 'cat_orange', name: 'Orange Cat', price: 45, type: 'mascot' },
+  { id: 'bunny', name: 'Bunny', price: 45, type: 'mascot' },
+  { id: 'bear', name: 'Bear', price: 45, type: 'mascot' },
 ];
 
 // Fixed-date holidays (month, day). Bonus multiplies vibe gains.
@@ -125,6 +134,13 @@ const VIBE_PER_LEVEL = 60;
 const ACORNS_PER_LEVEL = 30;
 
 const app = express();
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 app.use(express.json());
 app.use('/uploads', express.static(UPLOAD_DIR));
 // Marketing homepage (server/public) + APK download.
