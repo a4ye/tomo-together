@@ -112,6 +112,7 @@ const ITEMS = [
   { id: 'cat_black', name: 'Black Cat', price: 50, type: 'mascot' },
   { id: 'cat_orange', name: 'Orange Cat', price: 45, type: 'mascot' },
   { id: 'bunny', name: 'Bunny', price: 45, type: 'mascot' },
+  { id: 'bear', name: 'Bear', price: 45, type: 'mascot' },
 ];
 
 // Fixed-date holidays (month, day). Bonus multiplies vibe gains.

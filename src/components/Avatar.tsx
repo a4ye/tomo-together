@@ -129,7 +129,7 @@ type MascotPreset = {
   whisker?: string; // defaults to INK; dark-furred mascots need a lighter tone
   pattern?: 'tabby';
   patternColor?: string;
-  earShape?: 'cat' | 'bunny'; // defaults to 'cat'
+  earShape?: 'cat' | 'bunny' | 'bear'; // defaults to 'cat'
   whiskers?: boolean; // defaults to true
 };
 
@@ -150,6 +150,10 @@ const MASCOTS: Record<string, MascotPreset> = {
   bunny: {
     base: '#F8F1E6', earInner: '#F0B8C8', muzzle: '#FFFFFF',
     earShape: 'bunny', whiskers: false,
+  },
+  bear: {
+    base: '#C89968', earInner: '#8A6042', muzzle: '#F3E0C4',
+    earShape: 'bear', whiskers: false,
   },
 };
 const DEFAULT_MASCOT = 'kitty_cream';
@@ -192,6 +196,20 @@ function BunnyEars({ base, inner }: { base: string; inner: string }) {
       />
       <Path d="M13 28 Q9 12 12 -2 Q17 10 19 20 Q16 25 13 28 Z" fill={inner} />
       <Path d="M87 28 Q91 12 88 -2 Q83 10 81 20 Q84 25 87 28 Z" fill={inner} />
+    </G>
+  );
+}
+
+// Small semicircle bear ears, slanted so the base runs diagonally down
+// into the head silhouette (like the cat/bunny ears) instead of floating
+// beside it on a level line.
+function BearEars({ base, inner }: { base: string; inner: string }) {
+  return (
+    <G>
+      <Path d="M6 34 A18 18 0 0 1 34 16 Z" fill={base} stroke={INK} strokeWidth={4} strokeLinejoin="round" />
+      <Path d="M94 34 A18 18 0 0 0 66 16 Z" fill={base} stroke={INK} strokeWidth={4} strokeLinejoin="round" />
+      <Path d="M11 29 A11 11 0 0 1 29 18 Z" fill={inner} />
+      <Path d="M89 29 A11 11 0 0 0 71 18 Z" fill={inner} />
     </G>
   );
 }
@@ -259,9 +277,11 @@ export default function Avatar({
 
   return (
     <Svg width={size} height={size} viewBox="-8 -12 116 116">
-      {mascot && (mascot.earShape === 'bunny'
-        ? <BunnyEars base={bodyFill} inner={mascot.earInner} />
-        : <CatEars base={bodyFill} inner={mascot.earInner} />)}
+      {mascot && (
+        mascot.earShape === 'bunny' ? <BunnyEars base={bodyFill} inner={mascot.earInner} />
+        : mascot.earShape === 'bear' ? <BearEars base={bodyFill} inner={mascot.earInner} />
+        : <CatEars base={bodyFill} inner={mascot.earInner} />
+      )}
       <Path
         d={mascot ? MASCOT_HEAD_PATH : BODY_PATH}
         fill={bodyFill}
