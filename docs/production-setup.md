@@ -607,6 +607,10 @@ adjustments and treasury-funded event bonuses.
 volume and loops while the app is active. The visible **Music on/off** switch is
 available throughout the app and its preference is persisted in AsyncStorage.
 
+The project owner confirms that `Tomo Yard.mp3` was generated using their Suno
+plan and that they hold the rights needed to use and distribute it with this
+project.
+
 On Android/iOS, music is foreground-only: it pauses when the app becomes inactive,
 does not opt into lock-screen/background playback, respects silent mode, and mixes
 with other audio. On `https://ht6-app.icinoxis.net`, browser autoplay policy means
