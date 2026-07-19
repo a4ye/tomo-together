@@ -27,6 +27,22 @@ write_files:
       git fetch --force origin "$SHA"
       git checkout -f "$SHA"
       npm install --prefer-offline --no-audit --no-fund
+
+      # Same versioning contract as the old hosted workflow: versionCode = commit
+      # count, version.json published AFTER the APK so /apk/version never leads it.
+      VERSION_CODE=$(git rev-list --count HEAD)
+      node -e "
+        const fs = require('fs');
+        const j = JSON.parse(fs.readFileSync('app.json', 'utf8'));
+        j.expo.android.versionCode = $VERSION_CODE;
+        fs.writeFileSync('app.json', JSON.stringify(j, null, 2));
+        fs.writeFileSync('version.json', JSON.stringify({
+          versionCode: $VERSION_CODE,
+          versionName: j.expo.version,
+        }));
+      "
+      cat version.json
+
       npx expo prebuild --platform android --no-install
       printf '%s' "$KEYSTORE_B64" | base64 -d > android/app/upload.keystore
       printf '\norg.gradle.parallel=true\norg.gradle.caching=true\norg.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g\n' >> android/gradle.properties
@@ -36,11 +52,17 @@ write_files:
       export TOMO_UPLOAD_KEY_ALIAS=tomo
       export TOMO_UPLOAD_KEY_PASSWORD="$KEYSTORE_PASS"
       ./gradlew assembleRelease
-      APK=app/build/outputs/apk/release/app-release.apk
+      cd "$REPO"
+      APK=android/app/build/outputs/apk/release/app-release.apk
       curl -sf -X PUT -u "$KUDU_USER:$KUDU_PASS" -H "If-Match: *" \
         "https://ht6-tomoyard.scm.azurewebsites.net/api/vfs/data/apk/" || true
       curl -sf -X PUT --data-binary @"$APK" -u "$KUDU_USER:$KUDU_PASS" -H "If-Match: *" \
         "https://ht6-tomoyard.scm.azurewebsites.net/api/vfs/data/apk/tomo-yard.apk"
+      # version metadata lands after the APK so the app never sees a new version
+      # before the matching APK is downloadable
+      curl -sf -X PUT -u "$KUDU_USER:$KUDU_PASS" -H "If-Match: *" \
+        --data-binary @version.json \
+        "https://ht6-tomoyard.scm.azurewebsites.net/api/vfs/data/apk/version.json"
       cp "$APK" /opt/build/last.apk
       echo BUILD_OK
 

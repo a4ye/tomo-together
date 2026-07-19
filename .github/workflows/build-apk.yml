@@ -19,8 +19,11 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: build-apk
-  cancel-in-progress: true
+  group: build-apk-${{ github.ref }}
+  # queue builds instead of cancelling: each run publishes version.json, and a
+  # cancelled run never gets that far. Under active development the previous
+  # cancel-in-progress: true meant no build ever finished.
+  cancel-in-progress: false
 
 jobs:
   build:
