@@ -1,0 +1,51 @@
+name: Deploy web app
+
+# The web version is exported from the SAME src/ as the Android app on every
+# push, so it always stays an exact clone — change code once, both update.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "assets/**"
+      - "App.tsx"
+      - "index.ts"
+      - "app.json"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/deploy-web.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-web
+  cancel-in-progress: true
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Export react-native-web build
+        run: npx expo export --platform web --output-dir dist
+
+      - name: Zip export
+        run: cd dist && zip -qr ../web.zip .
+
+      - name: Upload to App Service (served at ht6-app.icinoxis.net)
+        env:
+          KUDU_USER: ${{ secrets.KUDU_USER }}
+          KUDU_PASS: ${{ secrets.KUDU_PASS }}
+        run: |
+          # ensure target dir exists, then let the Kudu zip API extract into it
+          curl -sf -X PUT -u "$KUDU_USER:$KUDU_PASS" -H "If-Match: *" \
+            "https://ht6-tomoyard.scm.azurewebsites.net/api/vfs/data/webapp/" || true
+          curl -sf -X PUT --data-binary @web.zip -u "$KUDU_USER:$KUDU_PASS" \
+            "https://ht6-tomoyard.scm.azurewebsites.net/api/zip/data/webapp/"

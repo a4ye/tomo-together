@@ -21,9 +21,10 @@ provider "azurerm" {
 provider "cloudflare" {}
 
 locals {
-  location = "westeurope"
-  app_name = "ht6-tomoyard"
-  domain   = "ht6.icinoxis.net"
+  location   = "westeurope"
+  app_name   = "ht6-tomoyard"
+  domain     = "ht6.icinoxis.net"
+  web_domain = "ht6-app.icinoxis.net" # react-native-web build of the app itself
 }
 
 data "cloudflare_zone" "icinoxis" {
@@ -114,6 +115,47 @@ resource "azurerm_app_service_managed_certificate" "cert" {
 resource "azurerm_app_service_certificate_binding" "bind" {
   hostname_binding_id = azurerm_app_service_custom_hostname_binding.ht6.id
   certificate_id      = azurerm_app_service_managed_certificate.cert.id
+  ssl_state           = "SniEnabled"
+}
+
+# --- second hostname: the react-native-web clone of the app ---
+
+resource "cloudflare_record" "ht6_app" {
+  zone_id = data.cloudflare_zone.icinoxis.id
+  name    = "ht6-app"
+  type    = "CNAME"
+  content = azurerm_linux_web_app.app.default_hostname
+  proxied = false
+  ttl     = 300
+}
+
+resource "cloudflare_record" "asuid_app" {
+  zone_id = data.cloudflare_zone.icinoxis.id
+  name    = "asuid.ht6-app"
+  type    = "TXT"
+  content = azurerm_linux_web_app.app.custom_domain_verification_id
+  ttl     = 300
+}
+
+resource "azurerm_app_service_custom_hostname_binding" "ht6_app" {
+  hostname            = local.web_domain
+  app_service_name    = azurerm_linux_web_app.app.name
+  resource_group_name = azurerm_resource_group.rg.name
+
+  depends_on = [cloudflare_record.ht6_app, cloudflare_record.asuid_app]
+
+  lifecycle {
+    ignore_changes = [ssl_state, thumbprint]
+  }
+}
+
+resource "azurerm_app_service_managed_certificate" "cert_app" {
+  custom_hostname_binding_id = azurerm_app_service_custom_hostname_binding.ht6_app.id
+}
+
+resource "azurerm_app_service_certificate_binding" "bind_app" {
+  hostname_binding_id = azurerm_app_service_custom_hostname_binding.ht6_app.id
+  certificate_id      = azurerm_app_service_managed_certificate.cert_app.id
   ssl_state           = "SniEnabled"
 }
 
