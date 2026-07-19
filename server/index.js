@@ -164,6 +164,12 @@ app.get('/apk', (_req, res) => {
   if (!fs.existsSync(apk)) return res.status(404).json({ error: 'APK not built yet' });
   res.download(apk, 'tomo-yard.apk');
 });
+// Version metadata for the in-app updater; CI writes version.json with the APK.
+app.get('/apk/version', (_req, res) => {
+  const f = path.join(DATA_DIR, 'apk', 'version.json');
+  if (!fs.existsSync(f)) return res.status(404).json({ error: 'No version info yet' });
+  res.type('json').send(fs.readFileSync(f, 'utf8'));
+});
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -386,6 +392,48 @@ app.get('/friends', auth, (req, res) => {
   }
   friends.sort((x, y) => y.vibe - x.vibe);
   res.json({ friends, incoming, outgoing });
+});
+
+// Detailed profile for one accepted friend, including your shared history.
+app.get('/friends/:username', auth, (req, res) => {
+  const me = req.user.id;
+  const other = db.prepare('SELECT * FROM users WHERE username = ?').get(req.params.username);
+  if (!other) return res.status(404).json({ error: 'No such user' });
+  const f = friendship(me, other.id);
+  if (!f || f.status !== 'accepted') return res.status(403).json({ error: 'Not your friend' });
+
+  // hangouts you two both attended
+  const shared = db.prepare(
+    `SELECT h.* FROM hangouts h
+     JOIN hangout_members m1 ON m1.hangout_id = h.id AND m1.user_id = ?
+     JOIN hangout_members m2 ON m2.hangout_id = h.id AND m2.user_id = ?
+     ORDER BY h.date DESC`
+  ).all(me, other.id);
+  const completed = shared.filter((h) => h.completed_at);
+  const upcoming = shared.filter((h) => !h.completed_at && new Date(h.date).getTime() >= Date.now());
+
+  // favourite shared activities, by how often you've done them together
+  const counts = {};
+  for (const h of completed) counts[h.activity_label] = (counts[h.activity_label] || 0) + 1;
+  const topActivities = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1]).slice(0, 3).map(([label]) => label);
+
+  res.json({
+    friend: {
+      ...publicUser(other),
+      birthday: other.birthday.slice(5),
+      vibe: f.vibe,
+      vibeLevel: level(f.vibe),
+      vibeIntoLevel: f.vibe % VIBE_PER_LEVEL,
+      vibePerLevel: VIBE_PER_LEVEL,
+      friendsSince: f.created_at,
+      lastHangout: completed[0] ? completed[0].date : null,
+      hangoutCount: completed.length,
+      upcomingCount: upcoming.length,
+      topActivities,
+      recentMemories: completed.slice(0, 4).map((h) => hangoutView(h, me)),
+    },
+  });
 });
 
 app.post('/friends/request', auth, (req, res) => {
