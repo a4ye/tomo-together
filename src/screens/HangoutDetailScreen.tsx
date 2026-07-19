@@ -23,6 +23,8 @@ export default function HangoutDetailScreen({ hangoutId }: { hangoutId: number }
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [stakeMsg, setStakeMsg] = useState<string | null>(null);
+  const [confirmEnd, setConfirmEnd] = useState(false);
+  const [endMsg, setEndMsg] = useState<string | null>(null);
 
   const load = useCallback(() => {
     return api.hangout(hangoutId).then((r) => setH(r.hangout)).catch((e) => setError(e.message));
@@ -49,6 +51,20 @@ export default function HangoutDetailScreen({ hangoutId }: { hangoutId: number }
       setH(r.hangout);
     } catch (e) {
       setStakeMsg(e instanceof Error ? e.message : 'Could not settle');
+    } finally {
+      setBusy(false);
+    }
+  }, [api, hangoutId]);
+
+  const doEnd = useCallback(async () => {
+    setBusy(true);
+    setEndMsg(null);
+    try {
+      const r = await api.endHangout(hangoutId);
+      setH(r.hangout);
+      setConfirmEnd(false);
+    } catch (e) {
+      setEndMsg(e instanceof Error ? e.message : 'Could not end the hangout');
     } finally {
       setBusy(false);
     }
@@ -114,14 +130,20 @@ export default function HangoutDetailScreen({ hangoutId }: { hangoutId: number }
             </Text>
           )}
           <View style={{ flexDirection: 'row', marginTop: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
-            {h.members.map((m) => (
-              <View key={m.username} style={{ alignItems: 'center', marginHorizontal: 8, marginBottom: 4 }}>
-                <Avatar color={m.color} species={m.species} equipped={m.equipped} size={52} />
-                <Text style={{ fontFamily: F.body, fontSize: 12, color: C.darkInk }}>
-                  {m.username === me?.username ? 'You' : m.name}
-                </Text>
-              </View>
-            ))}
+            {h.members.map((m) => {
+              const noShow = !!h.completedAt && !m.attended;
+              return (
+                <View key={m.username} style={{ alignItems: 'center', marginHorizontal: 8, marginBottom: 4, opacity: noShow ? 0.5 : 1 }}>
+                  <Avatar color={m.color} species={m.species} equipped={m.equipped} size={52} />
+                  <Text style={{ fontFamily: F.body, fontSize: 12, color: C.darkInk }}>
+                    {m.username === me?.username ? 'You' : m.name}
+                  </Text>
+                  {noShow && (
+                    <Text style={{ fontFamily: F.display, fontSize: 10, color: C.redPin }}>no-show</Text>
+                  )}
+                </View>
+              );
+            })}
           </View>
         </DoodleCard>
 
@@ -277,6 +299,68 @@ export default function HangoutDetailScreen({ hangoutId }: { hangoutId: number }
             );
           })}
         </DoodleCard>
+
+        {/* end early for no-shows */}
+        {h.canEnd && (
+          <>
+            <View style={{ marginTop: 16, marginBottom: 6 }}>
+              <OutlinedText size={20} color={C.labelOrange} outline={C.white} thickness={2}>
+                Someone flake?
+              </OutlinedText>
+            </View>
+            <DoodleCard seed={19}>
+              <Text style={{ fontFamily: F.body, fontSize: 13, color: C.brown, marginBottom: 8 }}>
+                You don't need everyone to tap. End it now and it wraps up with whoever
+                showed up{h.stake ? ', and the pool is split among them' : ''}. A friend
+                counts as here once they've taken the photo or confirmed with someone.
+              </Text>
+              {h.members.map((m) => (
+                <View
+                  key={m.username}
+                  style={{
+                    flexDirection: 'row', alignItems: 'center', paddingVertical: 6,
+                    borderTopWidth: 1.5, borderTopColor: '#DCC49A',
+                  }}
+                >
+                  <Text style={{ flex: 1, fontFamily: F.body, fontSize: 14, color: C.darkInk }}>
+                    {m.username === me?.username ? 'You' : m.name}
+                  </Text>
+                  <Text style={{ fontFamily: F.display, fontSize: 13, color: m.attended ? C.labelGreen : C.fadedInk }}>
+                    {m.attended ? 'here' : 'no sign yet'}
+                  </Text>
+                </View>
+              ))}
+              {!confirmEnd ? (
+                <View style={{ marginTop: 10 }}>
+                  <DoodleButton
+                    label="End the hangout"
+                    bg={C.yellow} border={C.brown} seed={15} disabled={busy}
+                    onPress={() => { setEndMsg(null); setConfirmEnd(true); }}
+                  />
+                </View>
+              ) : (
+                <View style={{ marginTop: 10 }}>
+                  <Text style={{ fontFamily: F.body, fontSize: 13, color: C.redPin, marginBottom: 8 }}>
+                    End now with the friends marked "here"?
+                    {h.stake ? ' This settles the pool and no-shows lose their stake.' : ''}
+                    {' '}This can't be undone.
+                  </Text>
+                  <DoodleButton
+                    label={busy ? 'Ending' : 'Yes, end it now'}
+                    bg={C.redPin} border={C.brown} seed={16} disabled={busy}
+                    onPress={doEnd}
+                  />
+                  <View style={{ marginTop: 8 }}>
+                    <DoodleButton label="Keep waiting" seed={18} disabled={busy} onPress={() => setConfirmEnd(false)} />
+                  </View>
+                </View>
+              )}
+              {endMsg && (
+                <Text style={{ fontFamily: F.body, fontSize: 13, color: C.redPin, marginTop: 8 }}>{endMsg}</Text>
+              )}
+            </DoodleCard>
+          </>
+        )}
 
         {h.completedAt && (
           <View style={{ alignItems: 'center', marginTop: 16 }}>

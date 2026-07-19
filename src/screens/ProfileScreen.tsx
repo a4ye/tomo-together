@@ -1,15 +1,17 @@
 import * as Application from 'expo-application';
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AcornPill from '../components/Acorn';
 import Avatar from '../components/Avatar';
 import { DoodleButton, DoodleCard } from '../components/Doodle';
+import { Chip, ChipRow } from '../components/InterestChips';
 import YardBackground from '../components/YardBackground';
 import TopBar from '../components/TopBar';
 import { useNav } from '../state/nav';
 import { useSession } from '../state/session';
 import { C, F } from '../theme';
+import { Activity } from '../types';
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December'];
@@ -21,12 +23,21 @@ function formatBirthday(birthday: string): string {
 }
 
 export default function ProfileScreen() {
-  const { me, signOut } = useSession();
+  const { me, signOut, api } = useSession();
   const nav = useNav();
   const insets = useSafeAreaInsets();
   const [signingOut, setSigningOut] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const signOutInFlight = useRef(false);
+  const [labels, setLabels] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    api.catalog()
+      .then((result) => setLabels(Object.fromEntries(
+        result.activities.map((activity: Activity) => [activity.id, activity.label]),
+      )))
+      .catch(() => {});
+  }, [api]);
 
   const handleSignOut = useCallback(async () => {
     if (signOutInFlight.current) return;
@@ -46,6 +57,9 @@ export default function ProfileScreen() {
 
   if (!me) return null;
 
+  // guard against a session persisted before interests existed
+  const interestLabels = (me.interests ?? []).map((id) => labels[id] ?? id);
+
   return (
     <View style={{ flex: 1 }}>
       <YardBackground bg={C.pink} tint={C.pinkPaw} seed={71} />
@@ -64,6 +78,27 @@ export default function ProfileScreen() {
             Birthday {formatBirthday(me.birthday)}
           </Text>
           <AcornPill amount={me.acorns} style={{ marginTop: 10 }} />
+        </DoodleCard>
+
+        <DoodleCard seed={6} style={{ marginTop: 12 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+            <Text style={{ fontFamily: F.display, fontSize: 15, color: C.darkInk }}>Interests</Text>
+            <Text
+              onPress={() => nav.push({ name: 'interests' })}
+              style={{ fontFamily: F.display, fontSize: 13, color: C.labelOrange }}
+            >
+              Edit
+            </Text>
+          </View>
+          {interestLabels.length > 0 ? (
+            <ChipRow>
+              {interestLabels.map((l) => <Chip key={l} label={l} on />)}
+            </ChipRow>
+          ) : (
+            <Text style={{ fontFamily: F.body, fontSize: 13.5, color: C.fadedInk }}>
+              No interests yet. Add a few so we suggest the right hangouts.
+            </Text>
+          )}
         </DoodleCard>
 
         <View style={{ marginTop: 12 }}>

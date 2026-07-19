@@ -1,14 +1,17 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { makeApi } from '../api';
 import Avatar, { SPECIES } from '../components/Avatar';
 import { DoodleButton, DoodleCard } from '../components/Doodle';
+import { InterestPicker } from '../components/InterestChips';
 import OutlinedText from '../components/OutlinedText';
 import YardBackground from '../components/YardBackground';
-import { useSession } from '../state/session';
+import { DEFAULT_SERVER, useSession } from '../state/session';
 import { C, F } from '../theme';
+import { Activity } from '../types';
 
 const COLORS = ['#A8D8C8', '#F5B8A0', '#C9B8E8', '#A0C8E8', '#F0D890', '#F0B8D0'];
 
@@ -56,8 +59,18 @@ export default function OnboardingScreen() {
   const [bd, setBd] = useState({ y: '', m: '', d: '' });
   const [color, setColor] = useState(COLORS[0]);
   const [species, setSpecies] = useState<string>('cat');
+  const [interests, setInterests] = useState<string[]>([]);
+  const [activities, setActivities] = useState<Activity[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // The catalog is public, so new Auth0 users can choose interests while they
+  // finish the app-specific part of onboarding.
+  useEffect(() => {
+    makeApi(DEFAULT_SERVER, null).catalog()
+      .then((result) => setActivities(result.activities))
+      .catch(() => {});
+  }, []);
 
   const authenticate = async () => {
     setError(null);
@@ -82,6 +95,7 @@ export default function OnboardingScreen() {
         birthday,
         color,
         species,
+        interests,
       });
     } catch (profileError) {
       setError(messageFor(profileError));
@@ -221,6 +235,12 @@ export default function OnboardingScreen() {
                 ))}
               </View>
             </View>
+
+            <Label>{`Your interests${interests.length > 0 ? ` (${interests.length})` : ''}`}</Label>
+            <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.fadedInk, marginBottom: 6 }}>
+              Pick a few. We'll suggest these kinds of hangouts first. You can change them later.
+            </Text>
+            <InterestPicker options={activities} value={interests} onChange={setInterests} />
 
             {error && (
               <Text style={{ fontFamily: F.body, fontSize: 13.5, color: C.redPin, marginTop: 10 }}>

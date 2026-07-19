@@ -21,6 +21,7 @@ import FriendProfileScreen from './src/screens/FriendProfileScreen';
 import FriendsScreen from './src/screens/FriendsScreen';
 import HangoutDetailScreen from './src/screens/HangoutDetailScreen';
 import HangoutsScreen from './src/screens/HangoutsScreen';
+import InterestsScreen from './src/screens/InterestsScreen';
 import LeaderboardScreen from './src/screens/LeaderboardScreen';
 import ConfirmScreen from './src/screens/ConfirmScreen';
 import MemoryBookScreen from './src/screens/MemoryBookScreen';
@@ -29,11 +30,13 @@ import OnboardingScreen from './src/screens/OnboardingScreen';
 import PhotoScreen from './src/screens/PhotoScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import WardrobeScreen from './src/screens/WardrobeScreen';
+import WorldScreen from './src/screens/WorldScreen';
 import YardScreen from './src/screens/YardScreen';
 
 function Screen({ route }: { route: Route }) {
   switch (route.name) {
     case 'yard': return <YardScreen />;
+    case 'world': return <WorldScreen />;
     case 'friends': return <FriendsScreen />;
     case 'friendCard': return <FriendCardScreen username={route.username} />;
     case 'friendProfile': return <FriendProfileScreen username={route.username} />;
@@ -53,6 +56,7 @@ function Screen({ route }: { route: Route }) {
     case 'leaderboard': return <LeaderboardScreen />;
     case 'wardrobe': return <WardrobeScreen />;
     case 'deposit': return <DepositScreen />;
+    case 'interests': return <InterestsScreen />;
     case 'profile': return <ProfileScreen />;
   }
 }

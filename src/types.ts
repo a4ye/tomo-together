@@ -10,6 +10,7 @@ export type Me = PublicUser & {
   birthday: string; // YYYY-MM-DD
   acorns: number;
   owned: string[];
+  interests: string[]; // activity ids you're into
 };
 
 export type TitleKind = 'stale' | 'streak' | 'best' | 'new' | 'close' | 'friend';
@@ -48,10 +49,11 @@ export type FriendProfile = FriendView & {
   hangoutCount: number;
   upcomingCount: number;
   topActivities: string[];
+  interests: string[]; // activity labels they're into
   recentMemories: Hangout[];
 };
 
-export type Activity = { id: string; label: string; combined?: number };
+export type Activity = { id: string; label: string; category?: string; combined?: number };
 
 export type WardrobeItem = { id: string; name: string; price: number; type?: 'accessory' | 'mascot' };
 
@@ -72,6 +74,8 @@ export type HangoutStake = {
   iStaked: boolean;
 };
 
+export type HangoutMember = PublicUser & { attended: boolean };
+
 export type Hangout = {
   id: number;
   activity: string;
@@ -82,9 +86,10 @@ export type Hangout = {
   bonusReason: string | null;
   photoUrl: string | null;
   completedAt: string | null;
-  members: PublicUser[];
+  members: HangoutMember[];
   confirmedPairs: [string, string][];
   pairsTotal: number;
+  canEnd: boolean; // started + has photo + not yet completed
   stake: HangoutStake | null;
 };
 
@@ -115,6 +120,7 @@ export type WithdrawalResult = {
 
 export type Route =
   | { name: 'yard' }
+  | { name: 'world' }
   | { name: 'friends' }
   | { name: 'friendProfile'; username: string }
   | { name: 'hangouts' }
@@ -127,4 +133,5 @@ export type Route =
   | { name: 'leaderboard' }
   | { name: 'wardrobe' }
   | { name: 'deposit' }
+  | { name: 'interests' }
   | { name: 'profile' };

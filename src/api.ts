@@ -62,13 +62,14 @@ export type AuthProfileInput = {
   birthday: string;
   color: string;
   species: string;
+  interests: string[];
 };
 
 export function makeApi(serverUrl: string, tokenSource: AccessTokenSource) {
   return {
     register: (b: {
       username: string; name: string; birthday: string; password: string;
-      color: string; species: string;
+      color: string; species: string; interests: string[];
     }) =>
       call<{ token: string; me: Me }>(serverUrl, null, 'POST', '/auth/register', b),
     login: (b: { username: string; password: string }) =>
@@ -79,6 +80,8 @@ export function makeApi(serverUrl: string, tokenSource: AccessTokenSource) {
     me: () => call<{ me: Me }>(serverUrl, tokenSource, 'GET', '/me'),
     setAvatar: (b: { color: string; equipped: string[]; species: string }) =>
       call<{ me: Me }>(serverUrl, tokenSource, 'PUT', '/me/avatar', b),
+    updateInterests: (interests: string[]) =>
+      call<{ me: Me }>(serverUrl, tokenSource, 'PUT', '/me/interests', { interests }),
     catalog: () =>
       call<{ activities: Activity[]; items: WardrobeItem[]; holidays: Holiday[] }>(
         serverUrl, null, 'GET', '/catalog'),
@@ -114,6 +117,8 @@ export function makeApi(serverUrl: string, tokenSource: AccessTokenSource) {
       call<{ hangout: Hangout }>(serverUrl, tokenSource, 'POST', `/hangouts/${id}/stake`),
     settleHangout: (id: number) =>
       call<{ hangout: Hangout }>(serverUrl, tokenSource, 'POST', `/hangouts/${id}/settle`),
+    endHangout: (id: number) =>
+      call<{ hangout: Hangout }>(serverUrl, tokenSource, 'POST', `/hangouts/${id}/end`),
     wallet: () => call<Wallet>(serverUrl, tokenSource, 'GET', '/wallet'),
     addFunds: () =>
       call<{ treasuryAddress?: string; depositAddresses?: unknown }>(
@@ -162,6 +167,8 @@ export function makeApi(serverUrl: string, tokenSource: AccessTokenSource) {
     leaderboard: () =>
       call<{ leaderboard: (PublicUser & { count: number; isMe: boolean })[]; month: string }>(
         serverUrl, tokenSource, 'GET', '/leaderboard'),
+    worldWsTicket: () =>
+      call<{ ticket: string }>(serverUrl, tokenSource, 'POST', '/world/ws-ticket'),
     buyItem: (itemId: string) => call<{ me: Me }>(serverUrl, tokenSource, 'POST', '/shop/buy', { itemId }),
     secretAcorns: () => call<{ me: Me }>(serverUrl, tokenSource, 'POST', '/secret/acorns'),
   };

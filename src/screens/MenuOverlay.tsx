@@ -6,6 +6,7 @@ import { useNav } from '../state/nav';
 import { Route } from '../types';
 
 const ITEMS: { label: string; route: Route }[] = [
+  { label: 'Explore', route: { name: 'world' } },
   { label: 'Friends', route: { name: 'friends' } },
   { label: 'Hangouts', route: { name: 'hangouts' } },
   { label: 'Memory Book', route: { name: 'memoryBook' } },

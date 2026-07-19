@@ -128,6 +128,13 @@ test('legacy registration/login tokens remain compatible only behind the explici
   assert.equal(allowed.status, 200);
   assert.equal(allowed.json.me.username, 'legacy_user');
 
+  // Some pre-interests databases can surface a serialized null-like value.
+  // Treat it as an empty list instead of leaking it or failing the profile read.
+  db.prepare("UPDATE users SET interests = 'null' WHERE username = ?").run('legacy_user');
+  const legacyNullInterests = await request('/me', { token: registered.json.token });
+  assert.equal(legacyNullInterests.status, 200);
+  assert.deepEqual(legacyNullInterests.json.me.interests, []);
+
   const jwtOnly = await request('/auth/profile', { token: registered.json.token });
   assert.equal(jwtOnly.status, 401);
 
@@ -212,12 +219,44 @@ test('Auth0 profile onboarding is secure, idempotent, and unlocks existing route
   assert.equal(required.status, 409);
   assert.deepEqual(required.json, { error: 'PROFILE_REQUIRED' });
 
+  const submittedInterests = [
+    'ramen',
+    'not-a-real-activity',
+    'ramen',
+    'boba',
+    'boardgames',
+    'karaoke',
+    'hiking',
+    'yoga',
+    'swimming',
+    'beach',
+    'cycling',
+    'photography',
+    'film',
+    'museum',
+    'sushi',
+  ];
+  const sanitizedInterests = [
+    'ramen',
+    'boba',
+    'boardgames',
+    'karaoke',
+    'hiking',
+    'yoga',
+    'swimming',
+    'beach',
+    'cycling',
+    'photography',
+    'film',
+    'museum',
+  ];
   const body = {
     username: 'auth0_user',
     name: 'Auth0 User',
     birthday: '2001-02-03',
     color: '#123ABC',
     species: 'frog',
+    interests: submittedInterests,
   };
   const created = await request('/auth/profile', { method: 'PUT', token: JWT_ONE, body });
   assert.equal(created.status, 201);
@@ -226,9 +265,11 @@ test('Auth0 profile onboarding is secure, idempotent, and unlocks existing route
   assert.equal(created.json.me.birthday, body.birthday);
   assert.equal(created.json.me.color, body.color);
   assert.equal(created.json.me.species, body.species);
+  assert.deepEqual(created.json.me.interests, sanitizedInterests);
 
   const row = db.prepare('SELECT * FROM users WHERE username = ?').get(body.username);
   assert.equal(row.auth0_sub, 'auth0|subject-1');
+  assert.deepEqual(JSON.parse(row.interests), sanitizedInterests);
   assert.equal(realAuth0.classifyBearerToken(row.token), 'invalid');
   assert.match(row.token, /^auth0-disabled:/);
   assert.match(row.pass_hash, /^auth0-disabled:/);
@@ -252,6 +293,32 @@ test('Auth0 profile onboarding is secure, idempotent, and unlocks existing route
   const protectedRoute = await request('/me', { token: JWT_ONE });
   assert.equal(protectedRoute.status, 200);
   assert.deepEqual(protectedRoute.json.me, created.json.me);
+
+  const legacyFriend = db.prepare('SELECT * FROM users WHERE username = ?').get('legacy_user');
+  const [aId, bId] = [legacyFriend.id, row.id].sort((a, b) => a - b);
+  db.prepare(`INSERT INTO friendships (a_id, b_id, status, requested_by, created_at)
+    VALUES (?, ?, 'accepted', ?, ?)`).run(
+    aId,
+    bId,
+    legacyFriend.id,
+    new Date().toISOString(),
+  );
+  const friendProfile = await request(`/friends/${body.username}`, { token: legacyFriend.token });
+  assert.equal(friendProfile.status, 200);
+  assert.deepEqual(friendProfile.json.friend.interests, [
+    'Ramen',
+    'Bubble Tea',
+    'Board Games',
+    'Karaoke',
+    'Hiking',
+    'Yoga',
+    'Swimming',
+    'Beach Day',
+    'Cycling',
+    'Photography',
+    'Movie Night',
+    'Museum',
+  ]);
 
   assert.throws(
     () => db.prepare('UPDATE users SET auth0_sub = ? WHERE username = ?')

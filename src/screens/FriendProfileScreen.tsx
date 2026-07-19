@@ -3,6 +3,7 @@ import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Avatar from '../components/Avatar';
 import { DoodleButton, DoodleCard } from '../components/Doodle';
+import { Chip, ChipRow } from '../components/InterestChips';
 import OutlinedText from '../components/OutlinedText';
 import Polaroid from '../components/Polaroid';
 import TitleBadge from '../components/TitleBadge';
@@ -142,6 +143,17 @@ export default function FriendProfileScreen({ username }: { username: string }) 
               })}
             </Text>
           </DoodleCard>
+
+          {profile.interests.length > 0 && (
+            <DoodleCard seed={11} style={{ marginTop: 12 }}>
+              <Text style={{ fontFamily: F.display, fontSize: 13, color: C.brown, marginBottom: 4 }}>
+                Into
+              </Text>
+              <ChipRow>
+                {profile.interests.map((l) => <Chip key={l} label={l} on />)}
+              </ChipRow>
+            </DoodleCard>
+          )}
 
           {profile.topActivities.length > 0 && (
             <DoodleCard seed={9} style={{ marginTop: 12 }}>
