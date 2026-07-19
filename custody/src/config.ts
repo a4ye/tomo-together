@@ -11,7 +11,15 @@ function required(name: string, placeholders: string[] = []): string {
   return v.trim();
 }
 
-export const PORT = Number(process.env.PORT ?? '8787');
+function parsePort(raw: string | undefined): number {
+  const value = Number(raw ?? '8787');
+  if (!Number.isInteger(value) || value <= 0 || value > 65535) {
+    throw new Error(`PORT must be an integer 1-65535; got ${JSON.stringify(raw)}`);
+  }
+  return value;
+}
+
+export const PORT = parsePort(process.env.PORT);
 
 export const UNIFOLD_SECRET_KEY = required('UNIFOLD_SECRET_KEY', [
   'sk_live_replace_me',

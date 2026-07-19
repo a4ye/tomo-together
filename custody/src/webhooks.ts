@@ -81,7 +81,11 @@ export async function handleUnifoldWebhook(
       const amount = details?.destination_amount;
       const owned =
         eventBelongsToConfiguredMode(event) &&
-        execution.status === 'completed' &&
+        // The event type already gates this to a completed deposit; accept the
+        // provider's terminal-success vocabulary ('completed' on the event object,
+        // 'succeeded' in the DirectExecution status enum) so a naming difference
+        // does not silently drop every webhook-credited deposit.
+        (execution.status === 'completed' || execution.status === 'succeeded') &&
         execution.treasury_account_id === TREASURY_ACCOUNT_ID &&
         details?.destination_chain_type === 'ethereum' &&
         details.destination_chain_id === String(CHAIN_ID) &&

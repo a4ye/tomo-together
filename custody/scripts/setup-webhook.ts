@@ -1,5 +1,5 @@
 // Programmatically register the Unifold webhook endpoint (instead of the dashboard).
-// Prints the signing secret — copy it into server/.env as UNIFOLD_WEBHOOK_SECRET.
+// Prints the signing secret — copy it into custody/.env as UNIFOLD_WEBHOOK_SECRET.
 //
 // Run:  UNIFOLD_SECRET_KEY=sk_live_… WEBHOOK_URL=https://<tunnel>/webhooks/unifold npm run setup:webhook
 import Unifold from '@unifold/node';
@@ -31,7 +31,7 @@ async function main(): Promise<void> {
   console.log('✅ Webhook endpoint created.');
   console.log(`   id:  ${endpoint.id}`);
   console.log(`   url: ${URL}`);
-  console.log('\nSigning secret — put this in server/.env as UNIFOLD_WEBHOOK_SECRET (shown once):');
+  console.log('\nSigning secret — put this in custody/.env as UNIFOLD_WEBHOOK_SECRET (shown once):');
   console.log(`\n   ${endpoint.secret}\n`);
 }
 

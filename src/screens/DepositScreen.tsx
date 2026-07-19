@@ -99,8 +99,17 @@ export default function DepositScreen() {
     setWalletBusy(true); setWalletMsg(null);
     try {
       const r = await api.addFunds();
-      const addr = (r.depositAddresses as { address?: string }[] | undefined)?.[0]?.address
-        || r.treasuryAddress || null;
+      // Unifold returns one deposit address per supported source chain with no
+      // guaranteed order. Pick the primary/EVM one — never blindly [0], which can
+      // be a non-Base (e.g. Solana) address that a Base send would strand. Do NOT
+      // fall back to treasuryAddress: it is not a monitored deposit wallet.
+      const list = r.depositAddresses as
+        { address?: string; chain_type?: string; is_primary?: boolean }[] | undefined;
+      const addr =
+        list?.find((a) => a.is_primary && typeof a.address === 'string')?.address
+        ?? list?.find((a) => a.chain_type === 'ethereum' && typeof a.address === 'string')?.address
+        ?? list?.find((a) => typeof a.address === 'string')?.address
+        ?? null;
       setDepositAddr(addr);
     } catch (e) {
       setWalletMsg(e instanceof Error ? e.message : 'Could not get a deposit address');
@@ -142,6 +151,15 @@ export default function DepositScreen() {
         setWithdrawalIntent(intent);
       }
       const result = await api.withdraw(intent.amountUnits, intent.destination, intent.key);
+      // ok:true can still carry a terminal failure — the transfer failed and the
+      // balance was refunded. Never report that as "sent".
+      if (result.ok && (result.status === 'failed' || result.status === 'refunded')) {
+        await AsyncStorage.removeItem(withdrawalStorageKey).catch(() => {});
+        setWithdrawalIntent(null);
+        await loadWallet();
+        setWalletMsg('Cash-out could not be sent — your balance was refunded.');
+        return;
+      }
       if (result.pending || !result.ok) {
         const pendingIntent = { ...intent, state: 'reconciling' as const };
         // The original durable record already has the exact key and payload;
