@@ -534,6 +534,12 @@ app.get('/suggestions', auth, (req, res) => {
   let best = null;
   for (const f of fr) {
     const otherId = f.a_id === me ? f.b_id : f.a_id;
+    // don't re-suggest a pair that already has a hangout in the works
+    const open = db.prepare(`SELECT COUNT(*) AS c FROM hangouts h
+      JOIN hangout_members m1 ON m1.hangout_id = h.id AND m1.user_id = ?
+      JOIN hangout_members m2 ON m2.hangout_id = h.id AND m2.user_id = ?
+      WHERE h.completed_at IS NULL`).get(me, otherId).c;
+    if (open > 0) continue;
     const { lastHangoutAt } = hangoutStats(me, otherId);
     const t = lastHangoutAt ? new Date(lastHangoutAt).getTime() : -Infinity;
     if (!best || t < best.t || (t === best.t && f.vibe > best.vibe))

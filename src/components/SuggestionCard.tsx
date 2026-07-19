@@ -126,6 +126,10 @@ export default function SuggestionCard({ delay = 0 }: { delay?: number }) {
         place: 'TBD',
         friendUsernames: [s.friend.username],
       });
+      // hide the card right away; the server also stops suggesting this pair
+      // while the created hangout is open
+      AsyncStorage.setItem(DISMISS_KEY, `${todayStamp()}|${s.friend.username}|${s.activity.id}`).catch(() => {});
+      setSugg(null);
       nav.push({ name: 'hangoutDetail', hangoutId: hangout.id });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not create hangout');
