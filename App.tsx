@@ -27,11 +27,13 @@ import OnboardingScreen from './src/screens/OnboardingScreen';
 import PhotoScreen from './src/screens/PhotoScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import WardrobeScreen from './src/screens/WardrobeScreen';
+import WorldScreen from './src/screens/WorldScreen';
 import YardScreen from './src/screens/YardScreen';
 
 function Screen({ route }: { route: Route }) {
   switch (route.name) {
     case 'yard': return <YardScreen />;
+    case 'world': return <WorldScreen />;
     case 'friends': return <FriendsScreen />;
     case 'friendCard': return <FriendCardScreen username={route.username} />;
     case 'friendProfile': return <FriendProfileScreen username={route.username} />;

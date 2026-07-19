@@ -5,6 +5,8 @@ const multer = require('multer');
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 4000;
 // DATA_DIR is overridable so hosted deploys can keep state outside the app dir
@@ -89,6 +91,14 @@ try {
   db.exec(`ALTER TABLE users ADD COLUMN species TEXT NOT NULL DEFAULT 'cat'`);
 } catch {
   // column already exists
+}
+
+// --- walkable world position (safe on existing DBs) ---
+for (const stmt of [
+  `ALTER TABLE users ADD COLUMN pos_x REAL`,
+  `ALTER TABLE users ADD COLUMN pos_y REAL`,
+]) {
+  try { db.exec(stmt); } catch { /* column exists */ }
 }
 
 // --- crypto staking columns/tables (safe on existing DBs) ---
@@ -942,4 +952,105 @@ app.post('/wallet/withdraw', auth, async (req, res) => {
 
 app.get('/health', (_req, res) => res.json({ ok: true, name: 'tomo-yard' }));
 
-app.listen(PORT, () => console.log(`Tomo Yard server on :${PORT}`));
+// ---------- walkable world (WebSocket) ----------
+// A shared map at /ws. Clients send {type:'move',x,y}; the server broadcasts
+// everyone's live position and persists each player's spot so their character
+// stays where they left it after logout.
+const WORLD_W = 2400;
+const WORLD_H = 1800;
+const AVATAR_R = 40; // keep spawns/positions inside the fence
+
+function clampPos(v, max) {
+  return Math.max(AVATAR_R, Math.min(max - AVATAR_R, Number(v) || 0));
+}
+function spawnPoint() {
+  return {
+    x: WORLD_W / 2 + (Math.random() * 2 - 1) * 300,
+    y: WORLD_H / 2 + (Math.random() * 2 - 1) * 220,
+  };
+}
+
+const live = new Map(); // username -> { ws, x, y }
+
+function worldPlayer(u, online) {
+  return {
+    username: u.username,
+    name: u.name,
+    color: u.color,
+    species: u.species,
+    equipped: JSON.parse(u.equipped),
+    x: u.pos_x,
+    y: u.pos_y,
+    online,
+  };
+}
+
+function broadcast(obj, exceptUsername) {
+  const msg = JSON.stringify(obj);
+  for (const [uname, c] of live) {
+    if (uname === exceptUsername) continue;
+    if (c.ws.readyState === 1) c.ws.send(msg);
+  }
+}
+
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: '/ws' });
+
+wss.on('connection', (ws, req) => {
+  const url = new URL(req.url, 'http://localhost');
+  const token = url.searchParams.get('token') || '';
+  const user = db.prepare('SELECT * FROM users WHERE token = ?').get(token);
+  if (!user) {
+    ws.close(4001, 'bad token');
+    return;
+  }
+
+  // position: saved, or a fresh spawn persisted immediately
+  let x = user.pos_x;
+  let y = user.pos_y;
+  if (x == null || y == null) {
+    const s = spawnPoint();
+    x = s.x; y = s.y;
+    db.prepare('UPDATE users SET pos_x = ?, pos_y = ? WHERE id = ?').run(x, y, user.id);
+  }
+  live.set(user.username, { ws, x, y });
+
+  // send initial state: every player who has ever entered the world
+  const all = db.prepare('SELECT * FROM users WHERE pos_x IS NOT NULL').all();
+  ws.send(JSON.stringify({
+    type: 'init',
+    world: { w: WORLD_W, h: WORLD_H },
+    me: user.username,
+    players: all.map((u) => worldPlayer(u, live.has(u.username))),
+  }));
+  broadcast({ type: 'join', player: worldPlayer(user, true) }, user.username);
+
+  let lastPersist = 0;
+  ws.on('message', (data) => {
+    let msg;
+    try { msg = JSON.parse(data.toString()); } catch { return; }
+    if (msg.type === 'move') {
+      const nx = clampPos(msg.x, WORLD_W);
+      const ny = clampPos(msg.y, WORLD_H);
+      const c = live.get(user.username);
+      if (c) { c.x = nx; c.y = ny; }
+      broadcast({ type: 'pos', username: user.username, x: nx, y: ny }, user.username);
+      const now = Date.now();
+      if (now - lastPersist > 1500) {
+        lastPersist = now;
+        db.prepare('UPDATE users SET pos_x = ?, pos_y = ? WHERE id = ?').run(nx, ny, user.id);
+      }
+    }
+  });
+
+  ws.on('close', () => {
+    const c = live.get(user.username);
+    if (c) {
+      db.prepare('UPDATE users SET pos_x = ?, pos_y = ? WHERE id = ?').run(c.x, c.y, user.id);
+    }
+    live.delete(user.username);
+    broadcast({ type: 'offline', username: user.username });
+  });
+});
+
+server.listen(PORT, () => console.log(`Tomo Yard server on :${PORT} (+ /ws world)`));

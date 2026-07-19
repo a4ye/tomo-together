@@ -98,6 +98,7 @@ export type Wallet = {
 
 export type Route =
   | { name: 'yard' }
+  | { name: 'world' }
   | { name: 'friends' }
   | { name: 'friendProfile'; username: string }
   | { name: 'hangouts' }
