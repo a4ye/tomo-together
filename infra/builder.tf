@@ -1,7 +1,7 @@
-# Fast APK builder: 8-core VM driven over SSH by the build-apk workflow.
-# Persistent clone + gradle daemon + caches => warm builds in a few minutes.
-# On-demand (spot quota is 3 vCPUs on this subscription). ~0.47 EUR/h;
-# deallocate with `az vm deallocate -g ht6-tomoyard-rg -n ht6-builder` when idle.
+# Fast APK builder: 32-core VM driven over SSH by the build-apk workflow.
+# The workflow starts it before the build and deallocates it right after, so
+# compute bills only for ~3 minutes per build (~0.10 EUR); between builds only
+# the disk (~12 EUR/mo) and static IP bill. Caches persist on the OS disk.
 
 resource "azurerm_virtual_network" "builder" {
   name                = "ht6-builder-vnet"
@@ -65,7 +65,7 @@ resource "azurerm_linux_virtual_machine" "builder" {
   name                = "ht6-builder"
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
-  size                = "Standard_D8as_v6"
+  size                = "Standard_D32as_v6"
   admin_username      = "azureuser"
 
   network_interface_ids = [azurerm_network_interface.builder.id]

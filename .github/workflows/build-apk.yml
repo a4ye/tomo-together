@@ -29,10 +29,29 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Azure login (scoped to the builder VM)
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # The 32-core builder is deallocated between builds; boot it on demand.
+      # Starting an already-running VM is a no-op, so queued builds are safe.
+      - name: Start builder VM
+        run: az vm start -g ht6-tomoyard-rg -n ht6-builder
+
       - name: Write SSH key
         run: |
           install -m 600 /dev/null builder_key
           printf '%s\n' "${{ secrets.BUILDER_SSH_KEY }}" > builder_key
+
+      - name: Wait for SSH
+        run: |
+          for i in $(seq 1 30); do
+            ssh -i builder_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 \
+              azureuser@${{ secrets.BUILDER_HOST }} 'echo up' && exit 0
+            sleep 5
+          done
+          echo "builder never came up" >&2; exit 1
 
       - name: Build on Azure VM
         env:
@@ -57,3 +76,9 @@ jobs:
         with:
           name: tomo-yard-apk
           path: tomo-yard.apk
+
+      # Stop the meter even when the build fails. --no-wait: nothing after
+      # this needs the VM, and a queued build will just start it again.
+      - name: Deallocate builder VM
+        if: always()
+        run: az vm deallocate --no-wait -g ht6-tomoyard-rg -n ht6-builder
