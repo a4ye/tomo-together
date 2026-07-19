@@ -1,0 +1,57 @@
+#cloud-config
+package_update: true
+packages:
+  - openjdk-17-jdk-headless
+  - unzip
+  - git
+  - curl
+  - ca-certificates
+
+write_files:
+  - path: /opt/build/build.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      # Fast APK build: persistent clone + node_modules + warm gradle daemon.
+      # Expects env: SHA, GH_TOKEN, KUDU_USER, KUDU_PASS, KEYSTORE_B64, KEYSTORE_PASS
+      set -euo pipefail
+      : "${SHA:?}" "${GH_TOKEN:?}" "${KUDU_USER:?}" "${KUDU_PASS:?}" "${KEYSTORE_B64:?}" "${KEYSTORE_PASS:?}"
+      export ANDROID_HOME=/opt/android-sdk
+      export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+      export PATH="$JAVA_HOME/bin:$PATH"
+      REPO=/opt/build/repo
+      URL="https://x-access-token:${GH_TOKEN}@github.com/a4ye/ht6-app.git"
+      if [ ! -d "$REPO/.git" ]; then git clone "$URL" "$REPO"; fi
+      cd "$REPO"
+      git remote set-url origin "$URL"
+      git fetch --force origin "$SHA"
+      git checkout -f "$SHA"
+      npm install --prefer-offline --no-audit --no-fund
+      npx expo prebuild --platform android --no-install
+      printf '%s' "$KEYSTORE_B64" | base64 -d > android/app/upload.keystore
+      printf '\norg.gradle.parallel=true\norg.gradle.caching=true\norg.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g\n' >> android/gradle.properties
+      cd android
+      export TOMO_UPLOAD_STORE_FILE=upload.keystore
+      export TOMO_UPLOAD_STORE_PASSWORD="$KEYSTORE_PASS"
+      export TOMO_UPLOAD_KEY_ALIAS=tomo
+      export TOMO_UPLOAD_KEY_PASSWORD="$KEYSTORE_PASS"
+      ./gradlew assembleRelease
+      APK=app/build/outputs/apk/release/app-release.apk
+      curl -sf -X PUT -u "$KUDU_USER:$KUDU_PASS" -H "If-Match: *" \
+        "https://ht6-tomoyard.scm.azurewebsites.net/api/vfs/data/apk/" || true
+      curl -sf -X PUT --data-binary @"$APK" -u "$KUDU_USER:$KUDU_PASS" -H "If-Match: *" \
+        "https://ht6-tomoyard.scm.azurewebsites.net/api/vfs/data/apk/tomo-yard.apk"
+      cp "$APK" /opt/build/last.apk
+      echo BUILD_OK
+
+runcmd:
+  - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+  - apt-get install -y nodejs
+  - mkdir -p /opt/android-sdk/cmdline-tools
+  - curl -fsSL -o /tmp/clt.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+  - unzip -q /tmp/clt.zip -d /opt/android-sdk/cmdline-tools
+  - mv /opt/android-sdk/cmdline-tools/cmdline-tools /opt/android-sdk/cmdline-tools/latest
+  - yes | /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses
+  - /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-35" "platforms;android-36" "build-tools;35.0.0" "build-tools;36.0.0"
+  - chown -R azureuser:azureuser /opt/build /opt/android-sdk
+  - touch /opt/build/.ready

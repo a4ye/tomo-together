@@ -183,7 +183,7 @@ export default function FriendsScreen() {
             placeholder="Search username or name"
             placeholderTextColor={C.fadedInk}
             style={{
-              backgroundColor: C.white, borderWidth: 2.5, borderColor: '#C89A62',
+              position: 'relative', backgroundColor: C.white, borderWidth: 2.5, borderColor: '#C89A62',
               borderRadius: 6, paddingHorizontal: 12, paddingVertical: 9,
               fontFamily: F.body, fontSize: 15, color: C.darkInk,
             }}

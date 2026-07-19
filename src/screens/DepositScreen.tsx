@@ -117,7 +117,7 @@ export default function DepositScreen() {
               placeholder="0.00"
               placeholderTextColor={C.fadedInk}
               style={{
-                flex: 1, backgroundColor: C.white, borderWidth: 2.5, borderColor: '#C89A62',
+                flex: 1, minWidth: 0, position: 'relative', backgroundColor: C.white, borderWidth: 2.5, borderColor: '#C89A62',
                 borderRadius: 6, paddingHorizontal: 12, paddingVertical: 9,
                 fontFamily: F.display, fontSize: 18, color: C.darkInk,
               }}

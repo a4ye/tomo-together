@@ -1,103 +1,54 @@
 name: Build APK
 
+# Builds on the ht6-builder Azure VM (8 cores, persistent gradle daemon +
+# caches) instead of the 2-core hosted runner: warm builds in a few minutes.
+# The hosted job only triggers the remote build and streams its logs.
 on:
   push:
     branches: [main]
     paths:
-      - 'src/**'
-      - 'assets/**'
-      - 'plugins/**'
-      - 'App.tsx'
-      - 'index.ts'
-      - 'app.json'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/build-apk.yml'
+      - "src/**"
+      - "assets/**"
+      - "plugins/**"
+      - "App.tsx"
+      - "index.ts"
+      - "app.json"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/build-apk.yml"
   workflow_dispatch:
 
 concurrency:
-  group: build-apk-${{ github.ref }}
+  group: build-apk
   cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          # full history so the commit count can serve as the versionCode
-          fetch-depth: 0
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-
-      - name: Stamp versionCode from commit count
+      - name: Write SSH key
         run: |
-          VERSION_CODE=$(git rev-list --count HEAD)
-          node -e "
-            const fs = require('fs');
-            const j = JSON.parse(fs.readFileSync('app.json', 'utf8'));
-            j.expo.android.versionCode = $VERSION_CODE;
-            fs.writeFileSync('app.json', JSON.stringify(j, null, 2));
-            fs.writeFileSync('version.json', JSON.stringify({
-              versionCode: $VERSION_CODE,
-              versionName: j.expo.version,
-            }));
-          "
-          cat version.json
+          install -m 600 /dev/null builder_key
+          printf '%s\n' "${{ secrets.BUILDER_SSH_KEY }}" > builder_key
 
-      - name: Generate android project
-        run: npx expo prebuild --platform android --no-install
-
-      - name: Decode upload keystore
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        run: printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/upload.keystore
-
-      - name: Build signed release APK
-        working-directory: android
-        env:
-          # storeFile is resolved relative to android/app by the module build.gradle
-          TOMO_UPLOAD_STORE_FILE: upload.keystore
-          TOMO_UPLOAD_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          TOMO_UPLOAD_KEY_ALIAS: tomo
-          TOMO_UPLOAD_KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon
-
-      - name: Publish APK to App Service
+      - name: Build on Azure VM
         env:
           KUDU_USER: ${{ secrets.KUDU_USER }}
           KUDU_PASS: ${{ secrets.KUDU_PASS }}
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # Trailing slash PUT creates the directory; tolerate failure when it already exists.
-          curl -sf -X PUT -u "$KUDU_USER:$KUDU_PASS" \
-            'https://ht6-tomoyard.scm.azurewebsites.net/api/vfs/data/apk/' || true
-          curl -sf -X PUT -u "$KUDU_USER:$KUDU_PASS" -H 'If-Match: *' \
-            --data-binary @android/app/build/outputs/apk/release/app-release.apk \
-            'https://ht6-tomoyard.scm.azurewebsites.net/api/vfs/data/apk/tomo-yard.apk'
-          # version metadata must land after the APK so the app never sees
-          # a new version before the matching APK is downloadable
-          curl -sf -X PUT -u "$KUDU_USER:$KUDU_PASS" -H 'If-Match: *' \
-            --data-binary @version.json \
-            'https://ht6-tomoyard.scm.azurewebsites.net/api/vfs/data/apk/version.json'
+          printf 'SHA=%s\nGH_TOKEN=%s\nKUDU_USER=%s\nKUDU_PASS=%s\nKEYSTORE_B64=%s\nKEYSTORE_PASS=%s\n' \
+            "$GITHUB_SHA" "$GH_TOKEN" "$KUDU_USER" "$KUDU_PASS" "$KEYSTORE_B64" "$KEYSTORE_PASS" \
+            | ssh -i builder_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 \
+                azureuser@${{ secrets.BUILDER_HOST }} \
+                'set -a && . /dev/stdin && exec /opt/build/build.sh'
 
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+      - name: Fetch APK for artifact
+        run: scp -i builder_key -o StrictHostKeyChecking=accept-new azureuser@${{ secrets.BUILDER_HOST }}:/opt/build/last.apk tomo-yard.apk
+
+      - uses: actions/upload-artifact@v4
         with:
           name: tomo-yard-apk
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: tomo-yard.apk

@@ -23,6 +23,12 @@ const inputStyle = {
   fontFamily: F.body,
   fontSize: 15,
   color: C.darkInk,
+  // react-native-web renders a real <input> with ~180px intrinsic width that
+  // refuses to flex-shrink; without this the birthday row overflows on phones.
+  minWidth: 0,
+  // RN-web TextInputs are statically positioned (unlike View/Text), so the
+  // absolutely-positioned 9-slice panel sprites paint over them. No-op native.
+  position: 'relative',
 } as const;
 
 function Label({ children }: { children: string }) {
