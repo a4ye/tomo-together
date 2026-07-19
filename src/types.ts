@@ -10,6 +10,7 @@ export type Me = PublicUser & {
   birthday: string; // YYYY-MM-DD
   acorns: number;
   owned: string[];
+  interests: string[]; // activity ids you're into
 };
 
 export type TitleKind = 'stale' | 'streak' | 'best' | 'new' | 'close' | 'friend';
@@ -48,6 +49,7 @@ export type FriendProfile = FriendView & {
   hangoutCount: number;
   upcomingCount: number;
   topActivities: string[];
+  interests: string[]; // activity labels they're into
   recentMemories: Hangout[];
 };
 
@@ -114,4 +116,5 @@ export type Route =
   | { name: 'leaderboard' }
   | { name: 'wardrobe' }
   | { name: 'deposit' }
+  | { name: 'interests' }
   | { name: 'profile' };

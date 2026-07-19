@@ -107,9 +107,12 @@ for (const stmt of [
   `ALTER TABLE hangouts ADD COLUMN crypto_event_id TEXT`,    // Unifold event id
   `ALTER TABLE hangouts ADD COLUMN settled_at TEXT`,
   `ALTER TABLE hangouts ADD COLUMN photo_by INTEGER`,        // who took the photo = proof they showed
+  `ALTER TABLE users ADD COLUMN interests TEXT NOT NULL DEFAULT '[]'`, // JSON array of activity ids
 ]) {
   try { db.exec(stmt); } catch { /* column exists */ }
 }
+// small key/value store for one-time migrations
+db.exec(`CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)`);
 db.exec(`
 CREATE TABLE IF NOT EXISTS hangout_stakes (
   hangout_id INTEGER NOT NULL,
@@ -142,6 +145,52 @@ const ACTIVITIES = [
   { id: 'beach', label: 'Beach Day' },
   { id: 'bookcafe', label: 'Book Cafe' },
 ];
+
+// ---------- interests (stated activity preferences) ----------
+// An interest is one of the activity ids above. It gives that activity a lift in
+// every ranking (suggestions + the activity tree), on top of the learned duel
+// weights, and shows on your profile.
+const INTEREST_BOOST = 15;
+const ACTIVITY_IDS = new Set(ACTIVITIES.map((a) => a.id));
+const labelOf = (id) => (ACTIVITIES.find((a) => a.id === id) || {}).label;
+
+function sanitizeInterests(arr) {
+  if (!Array.isArray(arr)) return [];
+  const out = [];
+  for (const x of arr) if (ACTIVITY_IDS.has(x) && !out.includes(x)) out.push(x);
+  return out.slice(0, 12);
+}
+function interestsOf(u) {
+  try { return sanitizeInterests(JSON.parse(u.interests || '[]')); } catch { return []; }
+}
+function interestSetOf(userId) {
+  const u = db.prepare('SELECT interests FROM users WHERE id = ?').get(userId);
+  return new Set(u ? interestsOf(u) : []);
+}
+
+// One-time: give accounts that predate this feature a starter set of interests
+// drawn from the activities they've already upvoted (falling back to popular
+// picks), so their profiles and suggestions aren't blank. Guarded by app_meta so
+// a user who later clears their interests on purpose stays cleared.
+function seedInterestsForExistingUsers() {
+  if (db.prepare('SELECT 1 FROM app_meta WHERE key = ?').get('interests_seeded')) return;
+  const DEFAULTS = ['ramen', 'boba', 'film', 'boardgames', 'karaoke'];
+  const users = db.prepare("SELECT id FROM users WHERE interests IS NULL OR interests = '[]'").all();
+  const set = db.prepare('UPDATE users SET interests = ? WHERE id = ?');
+  const seedOne = db.transaction(() => {
+    for (const u of users) {
+      const liked = db.prepare(
+        'SELECT activity FROM weights WHERE user_id = ? AND weight > 52 ORDER BY weight DESC LIMIT 6'
+      ).all(u.id).map((r) => r.activity).filter((a) => ACTIVITY_IDS.has(a));
+      const picks = [...liked];
+      for (const d of DEFAULTS) { if (picks.length >= 3) break; if (!picks.includes(d)) picks.push(d); }
+      set.run(JSON.stringify(picks), u.id);
+    }
+    db.prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)').run('interests_seeded', '1');
+  });
+  seedOne();
+}
+seedInterestsForExistingUsers();
 
 const ITEMS = [
   { id: 'party_hat', name: 'Party Hat', price: 60 },
@@ -408,7 +457,7 @@ function maybeComplete(hangoutId) {
 
 // ---------- auth ----------
 app.post('/auth/register', (req, res) => {
-  const { username, name, birthday, password, color, species } = req.body || {};
+  const { username, name, birthday, password, color, species, interests } = req.body || {};
   if (!/^[a-z0-9_]{3,20}$/.test(username || ''))
     return res.status(400).json({ error: 'Username must be 3-20 chars: a-z, 0-9, _' });
   if (!name || name.length < 1 || name.length > 40)
@@ -421,10 +470,10 @@ app.post('/auth/register', (req, res) => {
     return res.status(409).json({ error: 'Username is taken' });
   const salt = crypto.randomBytes(8).toString('hex');
   const token = newToken();
-  db.prepare(`INSERT INTO users (username, name, birthday, pass_hash, salt, token, color, species, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  db.prepare(`INSERT INTO users (username, name, birthday, pass_hash, salt, token, color, species, interests, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(username, name, birthday, hash(password, salt), salt, token, color || '#A8D8C8',
-      SPECIES.includes(species) ? species : 'cat', now());
+      SPECIES.includes(species) ? species : 'cat', JSON.stringify(sanitizeInterests(interests)), now());
   const u = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
   cryptoApi.ensureUser(username).catch(() => {}); // best-effort wallet + monthly grant
   res.json({ token, me: meView(u) });
@@ -449,10 +498,17 @@ function meView(u) {
     species: u.species,
     owned: JSON.parse(u.owned),
     equipped: JSON.parse(u.equipped),
+    interests: interestsOf(u),
   };
 }
 
 app.get('/me', auth, (req, res) => res.json({ me: meView(req.user) }));
+
+app.put('/me/interests', auth, (req, res) => {
+  const interests = sanitizeInterests(req.body?.interests);
+  db.prepare('UPDATE users SET interests = ? WHERE id = ?').run(JSON.stringify(interests), req.user.id);
+  res.json({ me: meView(db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)) });
+});
 
 app.put('/me/avatar', auth, (req, res) => {
   const { color, equipped, species } = req.body || {};
@@ -546,6 +602,7 @@ app.get('/friends/:username', auth, (req, res) => {
       hangoutCount: completed.length,
       upcomingCount: upcoming.length,
       topActivities,
+      interests: interestsOf(other).map(labelOf).filter(Boolean),
       recentMemories: completed.slice(0, 4).map((h) => hangoutView(h, me)),
       ...friendTitle({
         vibeLevel: level(f.vibe),
@@ -617,6 +674,14 @@ function weightOf(userId, activity) {
   return r ? r.weight : 50;
 }
 
+// The score used to order activities for a person: their learned duel weight,
+// lifted if it's one of their stated interests. This is what makes interests
+// steer which hangouts get suggested.
+function rankScore(userId, activity, interestSet) {
+  const base = weightOf(userId, activity);
+  return interestSet && interestSet.has(activity) ? Math.min(100, base + INTEREST_BOOST) : base;
+}
+
 app.get('/activities/ranked', auth, (req, res) => {
   const usernames = String(req.query.with || '').split(',').filter(Boolean);
   const ids = [req.user.id];
@@ -624,9 +689,10 @@ app.get('/activities/ranked', auth, (req, res) => {
     const u = db.prepare('SELECT id FROM users WHERE username = ?').get(un);
     if (u) ids.push(u.id);
   }
+  const sets = new Map(ids.map((id) => [id, interestSetOf(id)]));
   const ranked = ACTIVITIES.map((a) => ({
     ...a,
-    combined: ids.reduce((s, id) => s + weightOf(id, a.id), 0) / ids.length,
+    combined: ids.reduce((s, id) => s + rankScore(id, a.id, sets.get(id)), 0) / ids.length,
   })).sort((x, y) => y.combined - x.combined);
   res.json({ activities: ranked });
 });
@@ -668,7 +734,9 @@ app.get('/suggestions', auth, (req, res) => {
   }
   if (!best) return res.json({ suggestion: null });
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(best.otherId);
-  const top = ACTIVITIES.map((a) => ({ ...a, combined: weightOf(me, a.id) + weightOf(u.id, a.id) }))
+  const meSet = interestSetOf(me);
+  const uSet = interestSetOf(u.id);
+  const top = ACTIVITIES.map((a) => ({ ...a, combined: rankScore(me, a.id, meSet) + rankScore(u.id, a.id, uSet) }))
     .sort((x, y) => y.combined - x.combined)[0];
   const stale = !best.lastHangoutAt || best.t < Date.now() - 14 * 24 * 3600 * 1000;
   res.json({

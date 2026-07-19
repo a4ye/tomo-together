@@ -19,6 +19,7 @@ import FriendProfileScreen from './src/screens/FriendProfileScreen';
 import FriendsScreen from './src/screens/FriendsScreen';
 import HangoutDetailScreen from './src/screens/HangoutDetailScreen';
 import HangoutsScreen from './src/screens/HangoutsScreen';
+import InterestsScreen from './src/screens/InterestsScreen';
 import LeaderboardScreen from './src/screens/LeaderboardScreen';
 import ConfirmScreen from './src/screens/ConfirmScreen';
 import MemoryBookScreen from './src/screens/MemoryBookScreen';
@@ -53,6 +54,7 @@ function Screen({ route }: { route: Route }) {
     case 'leaderboard': return <LeaderboardScreen />;
     case 'wardrobe': return <WardrobeScreen />;
     case 'deposit': return <DepositScreen />;
+    case 'interests': return <InterestsScreen />;
     case 'profile': return <ProfileScreen />;
   }
 }

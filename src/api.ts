@@ -49,7 +49,7 @@ export function makeApi(serverUrl: string, token: string | null) {
   return {
     register: (b: {
       username: string; name: string; birthday: string; password: string;
-      color: string; species: string;
+      color: string; species: string; interests: string[];
     }) =>
       call<{ token: string; me: Me }>(serverUrl, null, 'POST', '/auth/register', b),
     login: (b: { username: string; password: string }) =>
@@ -57,6 +57,8 @@ export function makeApi(serverUrl: string, token: string | null) {
     me: () => call<{ me: Me }>(serverUrl, token, 'GET', '/me'),
     setAvatar: (b: { color: string; equipped: string[]; species: string }) =>
       call<{ me: Me }>(serverUrl, token, 'PUT', '/me/avatar', b),
+    updateInterests: (interests: string[]) =>
+      call<{ me: Me }>(serverUrl, token, 'PUT', '/me/interests', { interests }),
     catalog: () =>
       call<{ activities: Activity[]; items: WardrobeItem[]; holidays: Holiday[] }>(
         serverUrl, null, 'GET', '/catalog'),
