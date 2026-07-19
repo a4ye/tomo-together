@@ -286,6 +286,7 @@ a{color:inherit;text-decoration:none}
 .c4{top:10svh;right:8vw;width:clamp(70px,11vw,120px)}
 .fin-copy{position:relative;z-index:6;display:flex;flex-direction:column;align-items:center;gap:10px;padding-bottom:30svh}
 .cta-big{font-size:clamp(1.5rem,6.4vw,2.1rem);padding:16px 38px 18px;border-radius:22px 27px 19px 29px;rotate:-1.2deg}
+.cta-web{background:var(--cream);font-size:clamp(1.05rem,4.2vw,1.3rem);padding:10px 26px 12px;border-radius:15px 21px 14px 23px;rotate:1.2deg}
 .fin-blob{position:absolute;z-index:4}
 .fn1{bottom:calc(25svh - 24px);left:calc(50% - 50px);width:104px;z-index:5}
 .fn2{bottom:calc(22svh - 18px);left:7%;width:74px}
@@ -705,6 +706,7 @@ a{color:inherit;text-decoration:none}
   <div class="fin-copy">
     <a class="btn cta-big" href="/apk" download>Start my yard</a>
     <p class="dl-cap">~100 MB · Android</p>
+    <a class="btn cta-web" href="https://ht6-app.icinoxis.net">Launch web version</a>
   </div>
 
   <svg class="fheart fh1 floaty" viewBox="0 0 32 30" aria-hidden="true"><use href="#d-heart"/></svg>
@@ -919,8 +921,8 @@ a{color:inherit;text-decoration:none}
   /* ---------- 7 · FINALE: everyone gathers ---------- */
   gsap.from('.fin-blob', { scrollTrigger: { trigger: '.sc-finale', start: 'top 70%', once: true },
     y: 40, scale: 0, transformOrigin: '50% 100%', duration: .6, ease: 'back.out(2.2)', stagger: .08 });
-  gsap.from('.cta-big', { scrollTrigger: { trigger: '.sc-finale', start: 'top 55%', once: true },
-    scale: .4, duration: .9, ease: 'elastic.out(1,.5)' });
+  gsap.from('.cta-big, .cta-web', { scrollTrigger: { trigger: '.sc-finale', start: 'top 55%', once: true },
+    scale: .4, duration: .9, ease: 'elastic.out(1,.5)', stagger: .16 });
   gsap.from('.fin-acorn', { scrollTrigger: { trigger: '.sc-finale', start: 'top 50%', once: true },
     y: -110, opacity: 0, duration: .7, ease: 'bounce.out', stagger: .09 });
   gsap.from('.credit', { scrollTrigger: { trigger: '.sc-finale', start: 'top 35%', once: true },

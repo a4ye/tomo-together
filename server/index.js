@@ -142,6 +142,20 @@ app.use((req, res, next) => {
 });
 app.use(express.json());
 app.use('/uploads', express.static(UPLOAD_DIR));
+// react-native-web clone of the app: CI exports the same src/ to static files and
+// drops them in DATA_DIR/webapp; we serve them for the ht6-app.* host only.
+const WEB_HOST = process.env.WEB_HOST || 'ht6-app.icinoxis.net';
+const WEB_DIR = path.join(DATA_DIR, 'webapp');
+const webStatic = express.static(WEB_DIR);
+app.use((req, res, next) => {
+  if (req.hostname !== WEB_HOST) return next();
+  webStatic(req, res, () => {
+    // SPA fallback: any non-file GET gets the app shell.
+    const shell = path.join(WEB_DIR, 'index.html');
+    if (req.method === 'GET' && fs.existsSync(shell)) return res.sendFile(shell);
+    next();
+  });
+});
 // Marketing homepage (server/public) + APK download.
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/apk', (_req, res) => {
