@@ -5,6 +5,7 @@ import Avatar from '../components/Avatar';
 import { DoodleButton, DoodleCard } from '../components/Doodle';
 import OutlinedText from '../components/OutlinedText';
 import Polaroid from '../components/Polaroid';
+import TitleBadge from '../components/TitleBadge';
 import TopBar from '../components/TopBar';
 import YardBackground from '../components/YardBackground';
 import { useNav } from '../state/nav';
@@ -86,7 +87,8 @@ export default function FriendProfileScreen({ username }: { username: string }) 
               {profile.name}
             </Text>
             <Text style={{ fontFamily: F.body, fontSize: 14, color: C.fadedInk }}>@{profile.username}</Text>
-            <Text style={{ fontFamily: F.body, fontSize: 13, color: C.brown, marginTop: 4 }}>
+            <TitleBadge title={profile.title} kind={profile.titleKind} style={{ marginTop: 6 }} />
+            <Text style={{ fontFamily: F.body, fontSize: 13, color: C.brown, marginTop: 6 }}>
               Birthday {prettyMonthDay(profile.birthday)}
             </Text>
 

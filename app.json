@@ -21,7 +21,8 @@
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
-        "android.permission.REQUEST_INSTALL_PACKAGES"
+        "android.permission.REQUEST_INSTALL_PACKAGES",
+        "android.permission.POST_NOTIFICATIONS"
       ],
       "package": "com.anonymous.friendsthing"
     },
@@ -31,6 +32,7 @@
     "plugins": [
       "./plugins/withTomoHce",
       "expo-font",
+      "expo-notifications",
       [
         "expo-camera",
         {
