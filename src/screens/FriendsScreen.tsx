@@ -1,11 +1,13 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Animated, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Avatar from '../components/Avatar';
 import { DoodleButton, DoodleCard } from '../components/Doodle';
 import OutlinedText from '../components/OutlinedText';
+import { AnimatedPixelSprite, FLAME_FRAMES } from '../components/PixelSprite';
 import YardBackground from '../components/YardBackground';
 import TopBar from '../components/TopBar';
+import { useNav } from '../state/nav';
 import { useSession } from '../state/session';
 import { C, F } from '../theme';
 import { FriendView, PublicUser } from '../types';
@@ -33,8 +35,64 @@ function VibeBar({ f }: { f: FriendView }) {
   );
 }
 
+// Accepted-friend row: tappable card, streak flame halo behind the avatar.
+function FriendRow({ f, seed, onPress }: { f: FriendView; seed: number; onPress: () => void }) {
+  const scale = useRef(new Animated.Value(1)).current;
+  const springTo = (v: number) =>
+    Animated.spring(scale, { toValue: v, useNativeDriver: true, speed: 40, bounciness: 10 }).start();
+  return (
+    <Pressable
+      onPress={onPress}
+      onPressIn={() => springTo(0.97)}
+      onPressOut={() => springTo(1)}
+    >
+      <Animated.View style={{ transform: [{ scale }] }}>
+        <DoodleCard seed={seed} tilt={0.5} style={{ marginBottom: 10 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <View style={{ width: 54, height: 54 }}>
+              {f.streak && (
+                <AnimatedPixelSprite
+                  frames={FLAME_FRAMES}
+                  px={3}
+                  interval={350}
+                  style={{ position: 'absolute', top: -12, left: 6 }}
+                />
+              )}
+              <Avatar color={f.color} species={f.species} equipped={f.equipped} size={54} />
+            </View>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
+                <Text style={{ fontFamily: F.display, fontSize: 16, color: C.darkInk }}>{f.name}</Text>
+                <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.fadedInk, marginLeft: 6 }}>
+                  @{f.username}
+                </Text>
+              </View>
+              {f.streak ? (
+                <>
+                  <Text style={{ fontFamily: F.display, fontSize: 11, color: C.orange }}>
+                    Friendship streak
+                  </Text>
+                  <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.brown }}>
+                    {`You've been hanging with ${f.name} a lot!`}
+                  </Text>
+                </>
+              ) : (
+                <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.brown }}>
+                  Birthday {f.birthday.replace('-', '/')}
+                </Text>
+              )}
+              <VibeBar f={f} />
+            </View>
+          </View>
+        </DoodleCard>
+      </Animated.View>
+    </Pressable>
+  );
+}
+
 export default function FriendsScreen() {
   const { api } = useSession();
+  const nav = useNav();
   const insets = useSafeAreaInsets();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<PublicUser[]>([]);
@@ -180,23 +238,12 @@ export default function FriendsScreen() {
           </Text>
         )}
         {friends.map((f, i) => (
-          <DoodleCard key={f.username} seed={i * 5 + 50} tilt={0.5} style={{ marginBottom: 10 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Avatar color={f.color} species={f.species} equipped={f.equipped} size={54} />
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
-                  <Text style={{ fontFamily: F.display, fontSize: 16, color: C.darkInk }}>{f.name}</Text>
-                  <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.fadedInk, marginLeft: 6 }}>
-                    @{f.username}
-                  </Text>
-                </View>
-                <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.brown }}>
-                  Birthday {f.birthday.replace('-', '/')}
-                </Text>
-                <VibeBar f={f} />
-              </View>
-            </View>
-          </DoodleCard>
+          <FriendRow
+            key={f.username}
+            f={f}
+            seed={i * 5 + 50}
+            onPress={() => nav.push({ name: 'friendCard', username: f.username })}
+          />
         ))}
 
         {outgoing.length > 0 && (

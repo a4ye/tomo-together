@@ -225,6 +225,26 @@ function memberIds(hangoutId) {
     .all(hangoutId).map((r) => r.user_id);
 }
 
+// Completed hangouts both users attended: last one + count over the past 30 days.
+function hangoutStats(meId, otherId) {
+  const cutoff = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  const r = db.prepare(`SELECT MAX(h.completed_at) last, SUM(h.completed_at > ?) recent
+    FROM hangouts h
+    JOIN hangout_members m1 ON m1.hangout_id = h.id AND m1.user_id = ?
+    JOIN hangout_members m2 ON m2.hangout_id = h.id AND m2.user_id = ?
+    WHERE h.completed_at IS NOT NULL`).get(cutoff, meId, otherId);
+  return { lastHangoutAt: r.last, recentHangouts: r.recent || 0, streak: (r.recent || 0) >= 3 };
+}
+
+// Next Friday 18:00 local, strictly in the future (today 18:00 if Friday before 18:00).
+function nextFriday18(from = new Date()) {
+  const d = new Date(from);
+  d.setDate(d.getDate() + ((5 - d.getDay() + 7) % 7));
+  d.setHours(18, 0, 0, 0);
+  if (d <= from) d.setDate(d.getDate() + 7);
+  return d;
+}
+
 function allPairs(ids) {
   const out = [];
   for (let i = 0; i < ids.length; i++)
@@ -360,7 +380,7 @@ app.get('/friends', auth, (req, res) => {
       vibeIntoLevel: f.vibe % VIBE_PER_LEVEL,
       vibePerLevel: VIBE_PER_LEVEL,
     };
-    if (f.status === 'accepted') friends.push(view);
+    if (f.status === 'accepted') friends.push({ ...view, ...hangoutStats(me, otherId) });
     else if (f.requested_by === me) outgoing.push(view);
     else incoming.push(view);
   }
@@ -397,6 +417,30 @@ app.post('/friends/accept', auth, (req, res) => {
   res.json({ ok: true });
 });
 
+// Friend card: profile + vibe + tastes for the tap-on-friend detail view.
+app.get('/friends/:username/card', auth, (req, res) => {
+  const u = db.prepare('SELECT * FROM users WHERE username = ?').get(req.params.username);
+  const f = u && friendship(req.user.id, u.id);
+  if (!f || f.status !== 'accepted') return res.status(404).json({ error: 'Not your friend' });
+  const labels = (rows) => rows
+    .map((r) => ACTIVITIES.find((a) => a.id === r.activity))
+    .filter(Boolean).slice(0, 3).map((a) => a.label);
+  const likes = labels(db.prepare(
+    'SELECT activity FROM weights WHERE user_id = ? AND weight > 52 ORDER BY weight DESC').all(u.id));
+  const dislikes = labels(db.prepare(
+    'SELECT activity FROM weights WHERE user_id = ? AND weight < 48 ORDER BY weight ASC').all(u.id));
+  res.json({
+    card: {
+      ...publicUser(u),
+      birthday: u.birthday.slice(5),
+      vibeLevel: level(f.vibe),
+      lastHangoutAt: hangoutStats(req.user.id, u.id).lastHangoutAt,
+      likes,
+      dislikes,
+    },
+  });
+});
+
 // ---------- activity weights and duels ----------
 function weightOf(userId, activity) {
   const r = db.prepare('SELECT weight FROM weights WHERE user_id = ? AND activity = ?')
@@ -431,6 +475,35 @@ app.post('/duels', auth, (req, res) => {
   up.run(req.user.id, winner, Math.min(100, w + dw), Math.min(100, w + dw));
   up.run(req.user.id, loser, Math.max(0, l - dw / 2), Math.max(0, l - dw / 2));
   res.json({ ok: true });
+});
+
+// ---------- suggestions ----------
+// One concrete plan: most-neglected friend + the pair's best activity, next Friday 18:00.
+app.get('/suggestions', auth, (req, res) => {
+  const me = req.user.id;
+  const fr = db.prepare(
+    `SELECT * FROM friendships WHERE (a_id = ? OR b_id = ?) AND status = 'accepted'`).all(me, me);
+  let best = null;
+  for (const f of fr) {
+    const otherId = f.a_id === me ? f.b_id : f.a_id;
+    const { lastHangoutAt } = hangoutStats(me, otherId);
+    const t = lastHangoutAt ? new Date(lastHangoutAt).getTime() : -Infinity;
+    if (!best || t < best.t || (t === best.t && f.vibe > best.vibe))
+      best = { otherId, t, vibe: f.vibe, lastHangoutAt };
+  }
+  if (!best) return res.json({ suggestion: null });
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(best.otherId);
+  const top = ACTIVITIES.map((a) => ({ ...a, combined: weightOf(me, a.id) + weightOf(u.id, a.id) }))
+    .sort((x, y) => y.combined - x.combined)[0];
+  const stale = !best.lastHangoutAt || best.t < Date.now() - 14 * 24 * 3600 * 1000;
+  res.json({
+    suggestion: {
+      friend: publicUser(u),
+      activity: { id: top.id, label: top.label },
+      date: nextFriday18().toISOString(),
+      reason: stale ? 'stale' : 'vibe',
+    },
+  });
 });
 
 // ---------- hangouts ----------

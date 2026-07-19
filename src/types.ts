@@ -18,6 +18,24 @@ export type FriendView = PublicUser & {
   vibeLevel: number;
   vibeIntoLevel: number;
   vibePerLevel: number;
+  lastHangoutAt: string | null; // ISO, last completed hangout together
+  recentHangouts: number; // completed together in the last 30 days
+  streak: boolean; // recentHangouts >= 3
+};
+
+export type FriendCard = PublicUser & {
+  birthday: string; // MM-DD
+  likes: string[]; // top activity labels from their learned weights
+  dislikes: string[]; // bottom activity labels
+  vibeLevel: number;
+  lastHangoutAt: string | null;
+};
+
+export type Suggestion = {
+  friend: PublicUser;
+  activity: { id: string; label: string };
+  date: string; // ISO
+  reason: 'stale' | 'vibe';
 };
 
 export type Activity = { id: string; label: string; combined?: number };
@@ -45,7 +63,8 @@ export type Route =
   | { name: 'yard' }
   | { name: 'friends' }
   | { name: 'hangouts' }
-  | { name: 'newHangout' }
+  | { name: 'newHangout'; preselect?: string }
+  | { name: 'friendCard'; username: string }
   | { name: 'hangoutDetail'; hangoutId: number }
   | { name: 'photo'; hangoutId: number }
   | { name: 'confirm'; hangoutId: number; otherUsername: string; otherName: string }

@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -9,6 +10,9 @@ import { useSession } from '../state/session';
 import { C, F } from '../theme';
 
 const QUOTAS = [2, 4, 6, 8];
+const DEPOSIT_KEY = 'tomo.deposit';
+
+type Deposit = { amount: number; quota: number; lockedAt: string };
 
 export default function DepositScreen() {
   const { api } = useSession();
@@ -16,6 +20,7 @@ export default function DepositScreen() {
   const [amount, setAmount] = useState('');
   const [quota, setQuota] = useState(4);
   const [thisMonth, setThisMonth] = useState<number | null>(null);
+  const [locked, setLocked] = useState<Deposit | null>(null);
 
   useEffect(() => {
     api.leaderboard().then((r) => {
@@ -23,6 +28,39 @@ export default function DepositScreen() {
       setThisMonth(meRow ? meRow.count : 0);
     }).catch(() => {});
   }, [api]);
+
+  useEffect(() => {
+    AsyncStorage.getItem(DEPOSIT_KEY).then((raw) => {
+      if (!raw) return;
+      try {
+        const d = JSON.parse(raw) as Deposit;
+        if (typeof d.amount === 'number' && typeof d.quota === 'number') {
+          setLocked(d);
+          setAmount(String(d.amount));
+          setQuota(d.quota);
+        }
+      } catch {}
+    }).catch(() => {});
+  }, []);
+
+  const parsedAmount = parseFloat(amount);
+  const amountOk = Number.isFinite(parsedAmount) && parsedAmount > 0;
+
+  const lock = () => {
+    if (!amountOk) return;
+    const d: Deposit = {
+      amount: Math.round(parsedAmount * 100) / 100,
+      quota,
+      lockedAt: new Date().toISOString(),
+    };
+    AsyncStorage.setItem(DEPOSIT_KEY, JSON.stringify(d)).catch(() => {});
+    setLocked(d);
+  };
+
+  const clear = () => {
+    AsyncStorage.removeItem(DEPOSIT_KEY).catch(() => {});
+    setLocked(null);
+  };
 
   return (
     <View style={{ flex: 1 }}>
@@ -41,6 +79,29 @@ export default function DepositScreen() {
             for the month. You never lose the money, it just stays locked until you show up enough.
           </Text>
         </DoodleCard>
+
+        {locked && (
+          <DoodleCard seed={4} bg={C.card} style={{ marginTop: 12 }}>
+            <Text style={{ fontFamily: F.display, fontSize: 15, color: C.darkInk }}>
+              Locked: ${locked.amount} USDC · goal {locked.quota} hangouts
+            </Text>
+            {thisMonth != null && (
+              <Text style={{ fontFamily: F.body, fontSize: 13, color: C.brown, marginTop: 3 }}>
+                {thisMonth} of {locked.quota} hangouts this month
+              </Text>
+            )}
+            <Pressable onPress={clear} style={{ marginTop: 6, alignSelf: 'flex-start' }}>
+              <Text
+                style={{
+                  fontFamily: F.body, fontSize: 12.5, color: C.fadedInk,
+                  textDecorationLine: 'underline',
+                }}
+              >
+                Unlock and clear (preview)
+              </Text>
+            </Pressable>
+          </DoodleCard>
+        )}
 
         <View style={{ marginTop: 14, marginBottom: 6 }}>
           <OutlinedText size={20} color={C.labelBlue} outline={C.white} thickness={2}>
@@ -97,7 +158,12 @@ export default function DepositScreen() {
         </DoodleCard>
 
         <View style={{ marginTop: 18 }}>
-          <DoodleButton label="Deposit" seed={11} disabled onPress={() => {}} />
+          <DoodleButton
+            label={locked ? 'Update deposit' : 'Deposit'}
+            bg={C.yellow} border={C.brown} seed={11}
+            disabled={!amountOk}
+            onPress={lock}
+          />
           <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.fadedInk, textAlign: 'center', marginTop: 8 }}>
             Deposits are not live yet. This is a preview of how it will work.
           </Text>

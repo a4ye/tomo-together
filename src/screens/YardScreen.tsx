@@ -5,25 +5,33 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AcornPill from '../components/Acorn';
 import Avatar from '../components/Avatar';
+import DepositReminder from '../components/DepositReminder';
 import { DoodleCard } from '../components/Doodle';
 import OutlinedText from '../components/OutlinedText';
+import { AnimatedPixelSprite, TEAR_FRAMES } from '../components/PixelSprite';
+import SuggestionCard from '../components/SuggestionCard';
 import YardBackground from '../components/YardBackground';
 import YardScene from '../components/YardScene';
 import { bonusPreview } from '../bonus';
 import { useNav } from '../state/nav';
 import { useSession } from '../state/session';
-import { BTN_CREAM, NineSliceBg } from '../components/PixelUI';
+import { BTN_CREAM, NineSliceBg, PANEL_CREAM } from '../components/PixelUI';
 import { C, F, wob } from '../theme';
 import { FriendView, Hangout, Holiday } from '../types';
 import MenuOverlay from './MenuOverlay';
 
 function BobbingAvatar({
-  friend, delay, size, onPress,
+  friend, delay, size, sad = false, onPress,
 }: {
-  friend: FriendView; delay: number; size: number; onPress: () => void;
+  friend: FriendView; delay: number; size: number; sad?: boolean; onPress: () => void;
 }) {
   const y = useRef(new Animated.Value(0)).current;
   useEffect(() => {
+    if (sad) {
+      // sad friends sit still
+      y.setValue(0);
+      return;
+    }
     const loop = Animated.loop(
       Animated.sequence([
         Animated.delay(delay),
@@ -33,11 +41,21 @@ function BobbingAvatar({
     );
     loop.start();
     return () => loop.stop();
-  }, [y, delay]);
+  }, [y, delay, sad]);
   return (
     <Pressable onPress={onPress}>
       <Animated.View style={{ transform: [{ translateY: y }], alignItems: 'center' }}>
-        <Avatar color={friend.color} species={friend.species} equipped={friend.equipped} size={size} />
+        <View>
+          <Avatar color={friend.color} species={friend.species} equipped={friend.equipped} size={size} />
+          {sad && (
+            <AnimatedPixelSprite
+              frames={TEAR_FRAMES}
+              px={3}
+              interval={500}
+              style={{ position: 'absolute', left: size * 0.6, top: size * 0.42 }}
+            />
+          )}
+        </View>
         <View style={{ marginTop: -6 }}>
           <OutlinedText size={13} color={C.white} outline={C.darkInk} thickness={1.5}>
             {friend.name}
@@ -80,17 +98,41 @@ export default function YardScreen() {
     [holidays, friends]
   );
 
+  // The single stalest friend in the yard: no hangout yet, or none in 14+ days.
+  // (FriendView carries no friendship age, so a null lastHangoutAt qualifies.)
+  const nudge = useMemo(() => {
+    const staleMs = 14 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const stale = friends
+      .slice(0, 8)
+      .filter((f) => !f.lastHangoutAt || now - new Date(f.lastHangoutAt).getTime() > staleMs)
+      .sort(
+        (a, b) =>
+          (a.lastHangoutAt ? new Date(a.lastHangoutAt).getTime() : 0) -
+          (b.lastHangoutAt ? new Date(b.lastHangoutAt).getTime() : 0)
+      );
+    return stale.length > 0 ? stale[0].username : null;
+  }, [friends]);
+
   const spots = useMemo(() => {
     const yardTop = height * 0.42;
     const yardH = height * 0.38;
-    return friends.slice(0, 8).map((f, i) => ({
-      friend: f,
-      x: 10 + ((i % 2) * 0.5 + wob(i * 17 + 2) * 0.38) * (width - 120),
-      y: yardTop + (i % 4) * (yardH / 4.4) + wob(i * 31) * 22,
-      size: 64 + Math.round(wob(i * 7) * 14),
-      delay: Math.round(wob(i * 3) * 1200),
-    }));
-  }, [friends, width, height]);
+    return friends.slice(0, 8).map((f, i) => {
+      const sad = f.username === nudge;
+      const baseY = yardTop + (i % 4) * (yardH / 4.4) + wob(i * 31) * 22;
+      return {
+        friend: f,
+        sad,
+        x: 10 + ((i % 2) * 0.5 + wob(i * 17 + 2) * 0.38) * (width - 120),
+        // keep the sad friend low enough that its speech bubble clears the header chips
+        y: sad ? Math.max(baseY, height * 0.52) : baseY,
+        size: 64 + Math.round(wob(i * 7) * 14),
+        delay: Math.round(wob(i * 3) * 1200),
+      };
+    });
+  }, [friends, width, height, nudge]);
+
+  const nudgeSpot = spots.find((s) => s.sad);
 
   return (
     <View style={{ flex: 1 }}>
@@ -126,11 +168,39 @@ export default function YardScreen() {
               friend={s.friend}
               size={s.size}
               delay={s.delay}
+              sad={s.sad}
               onPress={() => nav.push({ name: 'friends' })}
             />
           </View>
         ))
       )}
+
+      {/* nudge speech bubble above the sad friend */}
+      {nudgeSpot && (() => {
+        const bubbleW = 200;
+        const cx = nudgeSpot.x + nudgeSpot.size / 2;
+        const left = Math.min(Math.max(10, cx - bubbleW / 2), width - bubbleW - 10);
+        const notchLeft = Math.min(Math.max(cx - left - 6, 14), bubbleW - 26);
+        return (
+          <Pressable
+            onPress={() => nav.push({ name: 'newHangout', preselect: nudgeSpot.friend.username })}
+            style={{ position: 'absolute', left, top: nudgeSpot.y - 66, width: bubbleW }}
+          >
+            <View style={{ paddingVertical: 8, paddingHorizontal: 11 }}>
+              <NineSliceBg set={PANEL_CREAM} corner={12} />
+              <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.darkInk }}>
+                You haven't hung out with {nudgeSpot.friend.name} for a while…
+              </Text>
+            </View>
+            <View
+              style={{
+                position: 'absolute', bottom: -4, left: notchLeft, width: 11, height: 11,
+                backgroundColor: C.cream, transform: [{ rotate: '45deg' }],
+              }}
+            />
+          </Pressable>
+        );
+      })()}
 
       {/* header */}
       <View style={{ paddingTop: insets.top + 8, paddingHorizontal: 14 }}>
@@ -188,6 +258,15 @@ export default function YardScreen() {
             </DoodleCard>
           </Pressable>
         )}
+      </View>
+
+      {/* suggestion + deposit reminder cards, above the menu button */}
+      <View
+        pointerEvents="box-none"
+        style={{ position: 'absolute', left: 14, right: 14, bottom: insets.bottom + 102 }}
+      >
+        <SuggestionCard />
+        <DepositReminder delay={90} />
       </View>
 
       {/* menu button */}

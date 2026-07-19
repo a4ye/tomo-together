@@ -22,7 +22,7 @@ const TIME_CHOICES = [
   { label: 'Night', hour: 21 },
 ];
 
-export default function NewHangoutScreen() {
+export default function NewHangoutScreen({ preselect }: { preselect?: string }) {
   const { api } = useSession();
   const nav = useNav();
   const insets = useSafeAreaInsets();
@@ -45,9 +45,15 @@ export default function NewHangoutScreen() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    api.friends().then((r) => setFriends(r.friends)).catch(() => {});
+    api.friends().then((r) => {
+      setFriends(r.friends);
+      // start with the nudged friend selected, once verified against the list
+      if (preselect && r.friends.some((f) => f.username === preselect)) {
+        setPicked((p) => (p.includes(preselect) ? p : [...p, preselect]));
+      }
+    }).catch(() => {});
     api.catalog().then((r) => setHolidays(r.holidays)).catch(() => {});
-  }, [api]);
+  }, [api, preselect]);
 
   const toggle = (username: string) =>
     setPicked((p) => (p.includes(username) ? p.filter((x) => x !== username) : [...p, username]));
