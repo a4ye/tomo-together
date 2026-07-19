@@ -53,7 +53,7 @@ export type FriendProfile = FriendView & {
   recentMemories: Hangout[];
 };
 
-export type Activity = { id: string; label: string; combined?: number };
+export type Activity = { id: string; label: string; category?: string; combined?: number };
 
 export type WardrobeItem = { id: string; name: string; price: number; type?: 'accessory' | 'mascot' };
 

@@ -36,7 +36,8 @@ export default function ProfileScreen() {
 
   if (!me) return null;
 
-  const interestLabels = me.interests.map((id) => labels[id] ?? id);
+  // guard against a session persisted before interests existed
+  const interestLabels = (me.interests ?? []).map((id) => labels[id] ?? id);
 
   return (
     <View style={{ flex: 1 }}>

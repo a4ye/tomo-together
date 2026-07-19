@@ -205,8 +205,8 @@ export default function OnboardingScreen() {
                 </View>
               </View>
 
-              <Label>Your interests</Label>
-              <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.fadedInk, marginBottom: 4 }}>
+              <Label>{`Your interests${interests.length > 0 ? ` (${interests.length})` : ''}`}</Label>
+              <Text style={{ fontFamily: F.body, fontSize: 12.5, color: C.fadedInk, marginBottom: 6 }}>
                 Pick a few. We'll suggest these kinds of hangouts first. You can change them later.
               </Text>
               <InterestPicker options={activities} value={interests} onChange={setInterests} />

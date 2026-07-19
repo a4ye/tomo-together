@@ -2,6 +2,8 @@ import React from 'react';
 import { Pressable, Text, View, ViewStyle } from 'react-native';
 import { C, F } from '../theme';
 
+type Option = { id: string; label: string; category?: string };
+
 // A single pill. Tappable when onPress is given (selectable), otherwise a
 // read-only tag. `on` shows the selected/filled state.
 export function Chip({ label, on, onPress }: { label: string; on?: boolean; onPress?: () => void }) {
@@ -25,21 +27,50 @@ export function ChipRow({ children, style }: { children: React.ReactNode; style?
   return <View style={[{ flexDirection: 'row', flexWrap: 'wrap' }, style]}>{children}</View>;
 }
 
-// A multi-select field over {id,label} options, writing selected ids to `value`.
+// Keep the categories in the order the server sent them, without assuming the
+// options are pre-sorted.
+function groupByCategory(options: Option[]): [string, Option[]][] {
+  const order: string[] = [];
+  const map = new Map<string, Option[]>();
+  for (const o of options) {
+    const cat = o.category ?? 'More';
+    if (!map.has(cat)) { map.set(cat, []); order.push(cat); }
+    map.get(cat)!.push(o);
+  }
+  return order.map((cat) => [cat, map.get(cat)!]);
+}
+
+// A multi-select field over {id,label,category} options, writing selected ids to
+// `value`. Renders a labelled section per category so a long list stays scannable.
 export function InterestPicker({
   options, value, onChange,
 }: {
-  options: { id: string; label: string }[];
+  options: Option[];
   value: string[];
   onChange: (next: string[]) => void;
 }) {
   const toggle = (id: string) =>
     onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
+  const groups = groupByCategory(options);
   return (
-    <ChipRow>
-      {options.map((o) => (
-        <Chip key={o.id} label={o.label} on={value.includes(o.id)} onPress={() => toggle(o.id)} />
+    <View>
+      {groups.map(([cat, items]) => (
+        <View key={cat} style={{ marginBottom: 12 }}>
+          <Text
+            style={{
+              fontFamily: F.display, fontSize: 12, color: C.labelOrange,
+              letterSpacing: 0.5, marginBottom: 2, marginLeft: 4,
+            }}
+          >
+            {cat}
+          </Text>
+          <ChipRow>
+            {items.map((o) => (
+              <Chip key={o.id} label={o.label} on={value.includes(o.id)} onPress={() => toggle(o.id)} />
+            ))}
+          </ChipRow>
+        </View>
       ))}
-    </ChipRow>
+    </View>
   );
 }

@@ -131,20 +131,49 @@ CREATE TABLE IF NOT EXISTS hangout_settlements (
 
 const cryptoApi = require('./crypto');
 
-const ACTIVITIES = [
-  { id: 'ramen', label: 'Ramen' },
-  { id: 'karaoke', label: 'Karaoke' },
-  { id: 'hiking', label: 'Hiking' },
-  { id: 'film', label: 'Movie Night' },
-  { id: 'boardgames', label: 'Board Games' },
-  { id: 'boba', label: 'Bubble Tea' },
-  { id: 'climbing', label: 'Climbing' },
-  { id: 'museum', label: 'Museum' },
-  { id: 'picnic', label: 'Picnic' },
-  { id: 'arcade', label: 'Arcade' },
-  { id: 'beach', label: 'Beach Day' },
-  { id: 'bookcafe', label: 'Book Cafe' },
+// Activities double as interests. Grouped by category for the picker UI; the
+// original twelve ids are kept so existing weights/hangouts/interests stay valid.
+const ACTIVITY_GROUPS = [
+  ['Food & Drink', [
+    ['ramen', 'Ramen'], ['sushi', 'Sushi'], ['tacos', 'Tacos'], ['bbq', 'BBQ'],
+    ['brunch', 'Brunch'], ['coffee', 'Coffee'], ['boba', 'Bubble Tea'],
+    ['dessert', 'Dessert Run'], ['cooking', 'Cooking Together'], ['baking', 'Baking'],
+    ['winenight', 'Wine Night'], ['brewery', 'Brewery'],
+  ]],
+  ['Outdoors', [
+    ['hiking', 'Hiking'], ['picnic', 'Picnic'], ['beach', 'Beach Day'],
+    ['camping', 'Camping'], ['fishing', 'Fishing'], ['kayaking', 'Kayaking'],
+    ['stargazing', 'Stargazing'], ['gardening', 'Gardening'], ['roadtrip', 'Road Trip'],
+  ]],
+  ['Active & Sports', [
+    ['gym', 'Gym'], ['yoga', 'Yoga'], ['running', 'Running'], ['cycling', 'Cycling'],
+    ['climbing', 'Climbing'], ['basketball', 'Basketball'], ['soccer', 'Soccer'],
+    ['tennis', 'Tennis'], ['volleyball', 'Volleyball'], ['swimming', 'Swimming'],
+    ['skiing', 'Skiing'], ['surfing', 'Surfing'], ['skating', 'Skating'], ['bowling', 'Bowling'],
+  ]],
+  ['Games & Play', [
+    ['boardgames', 'Board Games'], ['videogames', 'Video Games'], ['arcade', 'Arcade'],
+    ['escaperoom', 'Escape Room'], ['lasertag', 'Laser Tag'], ['minigolf', 'Mini Golf'],
+    ['trivia', 'Trivia Night'], ['chess', 'Chess'], ['ttrpg', 'D&D Night'], ['karting', 'Go Karting'],
+  ]],
+  ['Arts & Culture', [
+    ['museum', 'Museum'], ['artgallery', 'Art Gallery'], ['theater', 'Theater'],
+    ['pottery', 'Pottery'], ['painting', 'Painting'], ['photography', 'Photography'],
+    ['bookcafe', 'Book Cafe'], ['bookclub', 'Book Club'],
+  ]],
+  ['Music & Nightlife', [
+    ['karaoke', 'Karaoke'], ['concert', 'Concert'], ['livemusic', 'Live Music'],
+    ['dancing', 'Dancing'], ['barhopping', 'Bar Hopping'], ['comedy', 'Comedy Show'],
+  ]],
+  ['Chill & Social', [
+    ['film', 'Movie Night'], ['anime', 'Anime Night'], ['shopping', 'Shopping'],
+    ['thrifting', 'Thrifting'], ['spa', 'Spa Day'], ['cafe', 'Cafe Hangout'],
+    ['volunteering', 'Volunteering'], ['petpark', 'Dog Park'],
+    ['amusementpark', 'Amusement Park'], ['aquarium', 'Aquarium'],
+  ]],
 ];
+const ACTIVITIES = ACTIVITY_GROUPS.flatMap(([category, items]) =>
+  items.map(([id, label]) => ({ id, label, category })));
 
 // ---------- interests (stated activity preferences) ----------
 // An interest is one of the activity ids above. It gives that activity a lift in
