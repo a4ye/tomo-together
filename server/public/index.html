@@ -942,6 +942,11 @@ a{color:inherit;text-decoration:none}
   var SCRUB_SCENE = .9;
   var SCRUB_HANDOFF = .75;
   var SCRUB_WORLD = 1.15;
+  /* Smoothed scrubs keep catching up after their range is exited; on a fast
+     scroll several run at once and whichever settles last re-poses the shared
+     world cast with stale coordinates. Landing a scrub the moment its trigger
+     is exited keeps exactly one scene writing each handoff pose. */
+  function settleScrub(self){ var tw = self.getTween(); if (tw) tw.progress(1); }
   var STORY_SNAP = {
     snapTo: function(value, self){
       if (!self.animation) return value;
@@ -1001,7 +1006,8 @@ a{color:inherit;text-decoration:none}
   }
   function zone(sel, fn){
     var tl = gsap.timeline({ scrollTrigger: {
-      trigger: sel, start: 'top bottom', end: 'top top', scrub: SCRUB_HANDOFF, invalidateOnRefresh: true
+      trigger: sel, start: 'top bottom', end: 'top top', scrub: SCRUB_HANDOFF, invalidateOnRefresh: true,
+      onLeave: settleScrub, onLeaveBack: settleScrub
     }});
     fn(tl);
     tl.to({}, { duration: .001 }, 1);
@@ -1086,7 +1092,7 @@ a{color:inherit;text-decoration:none}
   }}).fromTo('.sc-hero .ground .prop, .sc-hero .ground .decal',
     { opacity: 1 }, { opacity: 0, ease: 'none', immediateRender: false }, 0);
   (function(){
-    var t = gsap.timeline({ scrollTrigger: { trigger: '.sc-hero', start: 'top top', end: 'bottom top', scrub: SCRUB_SCENE, invalidateOnRefresh: true } });
+    var t = gsap.timeline({ scrollTrigger: { trigger: '.sc-hero', start: 'top top', end: 'bottom top', scrub: SCRUB_SCENE, invalidateOnRefresh: true, onLeave: settleScrub, onLeaveBack: settleScrub } });
     bandTo(t, .3, .55, 2, 6);
     t.to('#wcat', { y: function(){ return -(sv(BH[2]) - 26); }, scale: CATS[2], duration: .55, ease: 'steps(6)' }, .3);
     sunSeg(t, 1, .9, .05);
@@ -1137,7 +1143,8 @@ a{color:inherit;text-decoration:none}
   gsap.set(friends.join(','), { x: function(i){ return fromX[i]; } });
   var ftl = gsap.timeline({ scrollTrigger: {
     trigger: '.sc-friends', start: 'top top', end: '+=150%', scrub: SCRUB_SCENE, snap: STORY_SNAP,
-    pin: true, anticipatePin: 1, invalidateOnRefresh: true
+    pin: true, anticipatePin: 1, invalidateOnRefresh: true,
+    onLeave: settleScrub, onLeaveBack: settleScrub
   }});
   friends.forEach(function(s, i){
     ftl.to(s, { x: 0, duration: 1.4, ease: 'steps(22)' }, i * .7);
@@ -1180,7 +1187,8 @@ a{color:inherit;text-decoration:none}
   gsap.set('.sc-duel .line', { opacity: 0, y: 24 });
   var dtl = gsap.timeline({ scrollTrigger: {
     trigger: '.sc-duel', start: 'top top', end: '+=170%', scrub: SCRUB_SCENE, snap: STORY_SNAP,
-    pin: true, anticipatePin: 1, invalidateOnRefresh: true
+    pin: true, anticipatePin: 1, invalidateOnRefresh: true,
+    onLeave: settleScrub, onLeaveBack: settleScrub
   }});
   dtl.to('.sc-duel .line', { opacity: 1, y: 0, duration: .4, ease: 'back.out(2)' }, 0)
     .to('.card-l', { y: 0, duration: 1.5, ease: 'steps(14)' }, .3)
@@ -1236,7 +1244,8 @@ a{color:inherit;text-decoration:none}
   function carryY(){ return innerHeight - sv(16) - q('#wpol').offsetHeight + 16; }
   var ptl = gsap.timeline({ scrollTrigger: {
     trigger: '.sc-photo', start: 'top top', end: '+=150%', scrub: SCRUB_SCENE, snap: STORY_SNAP,
-    pin: true, anticipatePin: 1, invalidateOnRefresh: true
+    pin: true, anticipatePin: 1, invalidateOnRefresh: true,
+    onLeave: settleScrub, onLeaveBack: settleScrub
   }});
   ptl.to('#wpol', { x: function(){ var p = secPos(bigPol); return (p.x + p.w / 2) - q('#wpol').offsetWidth / 2; },
                     y: function(){ var p = secPos(bigPol); return (p.y + p.h / 2) - q('#wpol').offsetHeight / 2; },
@@ -1290,7 +1299,8 @@ a{color:inherit;text-decoration:none}
   gsap.set('.sc-tap .line', { opacity: 0, y: 24 });
   var ttl = gsap.timeline({ scrollTrigger: {
     trigger: '.sc-tap', start: 'top top', end: '+=200%', scrub: SCRUB_SCENE, snap: STORY_SNAP,
-    pin: true, anticipatePin: 1, invalidateOnRefresh: true
+    pin: true, anticipatePin: 1, invalidateOnRefresh: true,
+    onLeave: settleScrub, onLeaveBack: settleScrub
   }});
   ttl.to('.sc-tap .line', { opacity: 1, y: 0, duration: .4, ease: 'back.out(2)' }, 0)
      .to('.phone-l', { x: 0, duration: 1, ease: 'power2.out' }, .3)
@@ -1351,7 +1361,8 @@ a{color:inherit;text-decoration:none}
   var memT = q('.mem-travel');
   var btl = gsap.timeline({ scrollTrigger: {
     trigger: '.sc-book', start: 'top top', end: '+=180%', scrub: SCRUB_SCENE, snap: STORY_SNAP,
-    pin: true, anticipatePin: 1, invalidateOnRefresh: true
+    pin: true, anticipatePin: 1, invalidateOnRefresh: true,
+    onLeave: settleScrub, onLeaveBack: settleScrub
   }});
   btl.to('#wpol', { x: function(){ var p = secPos(memT); return (p.x + p.w / 2) - q('#wpol').offsetWidth / 2; },
                    y: function(){ var p = secPos(memT); return (p.y + p.h / 2) - q('#wpol').offsetHeight / 2; },
@@ -1415,8 +1426,10 @@ a{color:inherit;text-decoration:none}
     onRefresh: function(self){ if (self.progress > 0) finGo(); }
   });
   /* crown rides the fixed cat, so it must come off when scrolling back up */
-  function crownOn(){ gsap.to('#wcrown', { y: 0, opacity: 1, duration: .7, ease: 'bounce.out' }); }
-  function crownOff(){ gsap.to('#wcrown', { y: -90, opacity: 0, duration: .2, ease: 'steps(2)' }); }
+  /* overwrite: a fast flick can leave on+off tweens alive at once, and the
+     longer one would win regardless of scroll direction; newest intent wins */
+  function crownOn(){ gsap.to('#wcrown', { y: 0, opacity: 1, duration: .7, ease: 'bounce.out', overwrite: true }); }
+  function crownOff(){ gsap.to('#wcrown', { y: -90, opacity: 0, duration: .2, ease: 'steps(2)', overwrite: true }); }
   ScrollTrigger.create({
     trigger: '.sc-finale', start: 'top 45%',
     onEnter: crownOn, onLeaveBack: crownOff,
