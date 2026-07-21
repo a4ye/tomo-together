@@ -1,10 +1,10 @@
 name: Build APK
 
-# Builds on the ht6-builder Azure VM (32 cores, persistent gradle daemon +
-# caches) instead of the 2-core hosted runner: warm builds in a few minutes.
-# The hosted job uploads the current versioned build script, triggers it, and
-# streams its logs. This also updates already-provisioned builders whose
-# cloud-init custom_data is immutable.
+# Builds the signed Android release APK on a GitHub-hosted runner. Expo CNG
+# generates the native project, Gradle assembles a signed release, and the
+# artifact is published to the App Service via Kudu (served at /apk) and
+# uploaded as a workflow artifact. version.json is published only after its
+# matching APK so the in-app updater never sees a version ahead of its binary.
 on:
   push:
     branches: [main]
@@ -18,16 +18,14 @@ on:
       - "app.json"
       - "package.json"
       - "package-lock.json"
-      - "infra/build-apk-remote.sh"
+      - "scripts/ci-stamp-version.mjs"
       - ".github/workflows/build-apk.yml"
   workflow_dispatch:
 
 concurrency:
-  # Every ref shares one persistent builder checkout and output location.
+  # Each run publishes version.json only after its APK uploads; queue rather
+  # than cancel so an in-flight publish always completes.
   group: build-apk
-  # queue builds instead of cancelling: each run publishes version.json, and a
-  # cancelled run never gets that far. Under active development the previous
-  # cancel-in-progress: true meant no build ever finished.
   cancel-in-progress: false
 
 jobs:
@@ -35,75 +33,63 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Azure login (scoped to the builder VM)
-        uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          # versionCode is the commit count, so the full history is required.
+          fetch-depth: 0
 
-      # The 32-core builder is deallocated between builds; boot it on demand.
-      # Starting an already-running VM is a no-op, so queued builds are safe.
-      - name: Start builder VM
-        run: az vm start -g ht6-tomoyard-rg -n ht6-builder
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
 
-      # The public IP changes whenever the builder is destroyed and recreated;
-      # resolve it from Azure instead of pinning it in a secret.
-      - name: Resolve builder IP
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Stamp version (versionCode = commit count)
+        run: node scripts/ci-stamp-version.mjs
+
+      - name: Generate native Android project
+        run: EXPO_NO_GIT_STATUS=1 npx expo prebuild --clean --platform android --no-install
+
+      - name: Assemble signed release APK
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
-          BUILDER_HOST=$(az vm show -d -g ht6-tomoyard-rg -n ht6-builder --query publicIps -o tsv)
-          test -n "$BUILDER_HOST"
-          echo "BUILDER_HOST=$BUILDER_HOST" >> "$GITHUB_ENV"
+          set -euo pipefail
+          printf '%s' "$KEYSTORE_B64" | base64 -d > android/app/upload.keystore
+          printf '\norg.gradle.parallel=true\norg.gradle.caching=true\norg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g\n' >> android/gradle.properties
+          cd android
+          chmod +x gradlew
+          TOMO_UPLOAD_STORE_FILE=upload.keystore \
+          TOMO_UPLOAD_STORE_PASSWORD="$KEYSTORE_PASS" \
+          TOMO_UPLOAD_KEY_ALIAS=tomo \
+          TOMO_UPLOAD_KEY_PASSWORD="$KEYSTORE_PASS" \
+          ./gradlew assembleRelease --no-daemon
+          cd ..
+          cp android/app/build/outputs/apk/release/app-release.apk tomo-yard.apk
 
-      - name: Write SSH key
-        run: |
-          install -m 600 /dev/null builder_key
-          printf '%s\n' "${{ secrets.BUILDER_SSH_KEY }}" > builder_key
-
-      - name: Wait for builder (SSH + cloud-init toolchain)
-        run: |
-          for i in $(seq 1 60); do
-            ssh -i builder_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 \
-              azureuser@$BUILDER_HOST 'test -f /opt/build/.ready' && exit 0
-            sleep 10
-          done
-          echo "builder never became ready" >&2; exit 1
-
-      - name: Install current build script on builder
-        run: |
-          scp -i builder_key -o StrictHostKeyChecking=accept-new \
-            infra/build-apk-remote.sh \
-            azureuser@$BUILDER_HOST:/opt/build/build-ci.sh
-          ssh -i builder_key -o StrictHostKeyChecking=accept-new \
-            azureuser@$BUILDER_HOST \
-            'chmod 700 /opt/build/build-ci.sh'
-
-      - name: Build on Azure VM
+      - name: Publish APK + version to the App Service (Kudu)
         env:
           KUDU_USER: ${{ secrets.KUDU_USER }}
           KUDU_PASS: ${{ secrets.KUDU_PASS }}
-          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # NUL-delimited stdin preserves values literally. The remote command
-          # is static, so credentials are neither logged nor evaluated as code.
-          printf '%s\0' \
-            "$GITHUB_SHA" "$GH_TOKEN" "$KUDU_USER" "$KUDU_PASS" "$KEYSTORE_B64" "$KEYSTORE_PASS" \
-            | ssh -i builder_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 \
-                azureuser@$BUILDER_HOST \
-                '/opt/build/build-ci.sh'
-
-      - name: Fetch APK for artifact
-        run: scp -i builder_key -o StrictHostKeyChecking=accept-new azureuser@$BUILDER_HOST:/opt/build/last.apk tomo-yard.apk
+          # Ensure the target directory exists (ignore the "already exists" case).
+          curl -sf -X PUT -u "$KUDU_USER:$KUDU_PASS" -H 'If-Match: *' \
+            'https://ht6-tomoyard.scm.azurewebsites.net/api/vfs/data/apk/' || true
+          curl -sf -X PUT --data-binary @tomo-yard.apk -u "$KUDU_USER:$KUDU_PASS" -H 'If-Match: *' \
+            'https://ht6-tomoyard.scm.azurewebsites.net/api/vfs/data/apk/tomo-yard.apk'
+          # version.json last, so /apk/version never leads its binary.
+          curl -sf -X PUT --data-binary @version.json -u "$KUDU_USER:$KUDU_PASS" -H 'If-Match: *' \
+            'https://ht6-tomoyard.scm.azurewebsites.net/api/vfs/data/apk/version.json'
 
       - uses: actions/upload-artifact@v4
         with:
           name: tomo-yard-apk
           path: tomo-yard.apk
-
-      # Stop the meter even when the build fails. --no-wait: nothing after
-      # this needs the VM, and a queued build will just start it again.
-      - name: Deallocate builder VM
-        if: always()
-        run: az vm deallocate --no-wait -g ht6-tomoyard-rg -n ht6-builder

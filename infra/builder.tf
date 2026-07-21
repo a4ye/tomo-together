@@ -1,3 +1,11 @@
+# DISABLED: the APK is now built on a GitHub-hosted runner (see
+# .github/workflows/build-apk.yml), so this dedicated Azure builder VM and its
+# network are no longer used. The whole stack is commented out below; a
+# `terraform apply` with this file in place will destroy the VM, disk, static
+# IP, and network to stop the between-builds disk/IP charges. To restore the
+# fast self-hosted builder, remove the /* */ wrappers and re-apply.
+
+/*
 # Fast APK builder: 32-core VM driven over SSH by the build-apk workflow.
 # The workflow starts it before the build and deallocates it right after, so
 # compute bills only for ~3 minutes per build (~0.10 EUR); between builds only
@@ -103,3 +111,4 @@ resource "azurerm_linux_virtual_machine" "builder" {
 output "builder_ip" {
   value = azurerm_public_ip.builder.ip_address
 }
+*/
