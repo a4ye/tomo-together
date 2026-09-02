@@ -2,9 +2,16 @@ name: Build APK
 
 # Builds the signed Android release APK on a GitHub-hosted runner. Expo CNG
 # generates the native project, Gradle assembles a signed release, and the
-# artifact is published to the App Service via Kudu (served at /apk) and
-# uploaded as a workflow artifact. version.json is published only after its
-# matching APK so the in-app updater never sees a version ahead of its binary.
+# artifact is published to BOTH backends (served at /apk) and uploaded as a
+# workflow artifact. version.json is published only after its matching APK so
+# the in-app updater never sees a version ahead of its binary.
+#
+# Two publish steps, deliberately:
+#   * R2, which is where the Cloudflare Worker reads the APK from. There is no
+#     Kudu on Workers, so without this step /apk would freeze at cutover.
+#   * Kudu, which is where the still-live Azure App Service reads it from.
+# The Kudu step is deleted when Azure is torn down, not before — until DNS is
+# flipped, Azure is still serving real users.
 on:
   push:
     branches: [main]
@@ -74,7 +81,19 @@ jobs:
           cd ..
           cp android/app/build/outputs/apk/release/app-release.apk tomo-yard.apk
 
-      - name: Publish APK + version to the App Service (Kudu)
+      # The Worker serves /apk straight out of R2, with the same
+      # Content-Disposition, range support and 404-when-absent behaviour.
+      - name: Publish APK + version to R2 (Cloudflare Worker)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          node scripts/r2-publish.mjs tomo-yard.apk apk/tomo-yard.apk
+          # version.json last, so /apk/version never leads its binary.
+          node scripts/r2-publish.mjs version.json apk/version.json
+
+      - name: Publish APK + version to the App Service (Kudu, until Azure teardown)
         env:
           KUDU_USER: ${{ secrets.KUDU_USER }}
           KUDU_PASS: ${{ secrets.KUDU_PASS }}

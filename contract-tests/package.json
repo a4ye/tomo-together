@@ -1,0 +1,14 @@
+{
+  "name": "tomo-together-contract-tests",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Black-box HTTP contract tests for the tomo-together app + custody services. Driven entirely by BASE_URL; no app internals are imported.",
+  "scripts": {
+    "test:app": "node --test app.contract.test.mjs",
+    "test:custody": "node --test custody.contract.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tomo-together-custody",
+  "main": "src/index.ts",
+  // @unifold/node imports node:http/node:https at module load to build its
+  // default agents (they are never used — the transport is fetch, see
+  // src/unifold/client.ts). node:crypto is not needed.
+  "compatibility_date": "2025-08-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  // No version-preview hostnames: this service holds treasury custody and does
+  // not need extra public origins.
+  "preview_urls": false,
+  "observability": { "enabled": true },
+
+  "vars": {
+    // Mirrors the App Service settings of `ht6-tomoyard-crypto`, except that the
+    // backend is now D1. DATA_DIR / WEBSITES_ENABLE_APP_SERVICE_STORAGE are not
+    // carried over: they only fed the JSON fallback store, which production
+    // never selects.
+    "NODE_ENV": "production",
+    "CRYPTO_STORE_BACKEND": "d1",
+    "TREASURY_SOURCE_CHAIN_ID": "8453",
+    "ENABLE_RAW_BALANCE_ADJUSTMENTS": "true"
+    // ENABLE_RECURRING_REAL_USDC_GRANTS and
+    // ENABLE_TREASURY_FUNDED_EVENT_BONUSES are deliberately unset, exactly as on
+    // Azure, so /grant answers 403 and multiplierBps > 10000 is refused.
+    // UNIFOLD_WEBHOOK_SECRET is unset there too, so every webhook 400s.
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "tomo-together-custody",
+      "database_id": "2a4334e3-9030-4d41-8349-2d1d33b1afd1"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tomo-together-api",
+  "main": "src/index.ts",
+  // node:crypto (scrypt) and node:buffer are required by the auth port.
+  "compatibility_date": "2025-08-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  // No version-preview hostnames: one public origin per service is enough.
+  "preview_urls": false,
+  "observability": { "enabled": true },
+
+  "vars": {
+    // Reproduces the App Service settings of `ht6-tomoyard` one-for-one.
+    // AUTH0_AUDIENCE / AUTH0_ISSUER_BASE_URL / ALLOW_LEGACY_AUTH are deliberately
+    // NOT carried over: no code reads them (SPEC 9.4).
+    "WEB_HOST": "app.tomo-together.com",
+    "CRYPTO_API_URL": "https://tomo-together-custody.cloudflare-disjoin783.workers.dev"
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "tomo-together",
+      "database_id": "db51fbf5-da82-42f1-b100-f10ec18182aa"
+    }
+  ],
+
+  // Replaces DATA_DIR (/home/data on the Web App): uploads/, apk/, webapp/ and
+  // the marketing site under public/.
+  "r2_buckets": [
+    { "binding": "DATA", "bucket_name": "tomo-together-data" }
+  ],
+
+  // A Worker cannot fetch another Worker of the same account over workers.dev:
+  // Cloudflare answers `error code: 1042`. CRYPTO_API_URL above still builds the
+  // request URLs (and is still validated by loadBaseUrl), but the transport is
+  // this binding. See src/crypto/client.ts#custodyFetch.
+  "services": [
+    { "binding": "CUSTODY", "service": "tomo-together-custody" }
+  ],
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "WORLD", "class_name": "WorldDO" },
+      { "name": "CRYPTO_READINESS", "class_name": "CryptoReadinessDO" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["WorldDO", "CryptoReadinessDO"] }
+  ],
+
+  // The crypto readiness latch is scoped to (service token, worker version).
+  // A new deployment is the Workers equivalent of the process restart the
+  // Express build required to clear an `unauthorized` latch.
+  "version_metadata": { "binding": "CF_VERSION_METADATA" }
+}

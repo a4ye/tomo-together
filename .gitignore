@@ -83,3 +83,6 @@ server/data/
 # build artifact, served by CI instead
 tomo-yard.apk
 src/.Rhistory
+
+# Migration seed data: contains live user bearer tokens and custody records.
+migration/out/

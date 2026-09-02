@@ -1,0 +1,57 @@
+name: Deploy API Worker
+
+# Cloudflare Worker replacement for the `ht6-tomoyard` App Service.
+# Runs alongside deploy-server.yml (Azure) until DNS is flipped; neither
+# workflow touches the other's target.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "server/worker/**"
+      - "server/public/**"
+      - "migration/schema-app.sql"
+      - ".github/workflows/deploy-worker-api.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-worker-api
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/worker/package-lock.json
+
+      - name: Install
+        working-directory: server/worker
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: server/worker
+        run: npm run typecheck
+
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: server/worker
+          # MUST stay pinned: wrangler 3.90 (the action default) cannot read
+          # wrangler.jsonc and fails with "Missing entry-point" (SPEC section 7).
+          wranglerVersion: "4.127.1"
+
+      - name: Contract suite against the deployed Worker
+        env:
+          BASE_URL: https://tomo-together-api.cloudflare-disjoin783.workers.dev
+        working-directory: contract-tests
+        run: node --test app.contract.test.mjs
