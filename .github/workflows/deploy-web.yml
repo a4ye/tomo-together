@@ -3,14 +3,9 @@ name: Deploy web app
 # The web version is exported from the SAME src/ as the Android app on every
 # push, so it always stays an exact clone — change code once, both update.
 #
-# The bundle is published to BOTH backends: R2 (where the Cloudflare Worker
-# serves app.tomo-together.com from, since there is no Kudu on Workers) and the
-# Kudu zip API (where the still-live Azure App Service serves it from). The Kudu
-# step goes away with the Azure teardown, not before.
-#
-# Neither backend deletes files the new bundle does not contain — the Kudu zip
-# API only extracts over the directory — so a stale hashed asset lingers on both
-# in exactly the same way.
+# The bundle is published to R2, where the tomo-together-api Worker serves
+# app.tomo-together.com from. Files the new bundle does not contain are not
+# deleted, so stale hashed assets linger harmlessly.
 on:
   push:
     branches: [main]
@@ -49,22 +44,8 @@ jobs:
         # persistent transform cache whenever producing a deployment bundle.
         run: npx expo export --clear --platform web --output-dir dist
 
-      - name: Publish to R2 (Cloudflare Worker)
+      - name: Publish to R2
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.R2_PUBLISH_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: node scripts/r2-publish.mjs dist webapp
-
-      - name: Zip export
-        run: cd dist && zip -qr ../web.zip .
-
-      - name: Upload to App Service (Kudu, until Azure teardown)
-        env:
-          KUDU_USER: ${{ secrets.KUDU_USER }}
-          KUDU_PASS: ${{ secrets.KUDU_PASS }}
-        run: |
-          # ensure target dir exists, then let the Kudu zip API extract into it
-          curl -sf -X PUT -u "$KUDU_USER:$KUDU_PASS" -H "If-Match: *" \
-            "https://ht6-tomoyard.scm.azurewebsites.net/api/vfs/data/webapp/" || true
-          curl -sf -X PUT --data-binary @web.zip -u "$KUDU_USER:$KUDU_PASS" \
-            "https://ht6-tomoyard.scm.azurewebsites.net/api/zip/data/webapp/"

@@ -1,8 +1,7 @@
 name: Deploy API Worker
 
-# Cloudflare Worker replacement for the `ht6-tomoyard` App Service.
-# Runs alongside deploy-server.yml (Azure) until DNS is flipped; neither
-# workflow touches the other's target.
+# Main API + marketing site (tomo-together.com) and Expo web app
+# (app.tomo-together.com).
 
 on:
   push:

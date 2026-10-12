@@ -10,6 +10,13 @@
   "preview_urls": false,
   "observability": { "enabled": true },
 
+  // Both hostnames are this Worker; app.tomo-together.com gets the SPA, the
+  // apex gets the API and marketing site (see src/app.ts).
+  "routes": [
+    { "pattern": "tomo-together.com", "custom_domain": true },
+    { "pattern": "app.tomo-together.com", "custom_domain": true }
+  ],
+
   "vars": {
     // Reproduces the App Service settings of `ht6-tomoyard` one-for-one.
     // AUTH0_AUDIENCE / AUTH0_ISSUER_BASE_URL / ALLOW_LEGACY_AUTH are deliberately

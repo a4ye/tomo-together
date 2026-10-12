@@ -1,5 +1,5 @@
-// Publishes a file or a directory tree into the R2 bucket that replaced
-// DATA_DIR on the App Service.
+// Publishes a file or a directory tree into the R2 bucket the tomo-together-api
+// Worker serves uploads/, apk/ and webapp/ from.
 //
 //   node scripts/r2-publish.mjs <local path> <r2 key or prefix>
 //
@@ -9,15 +9,9 @@
 // Environment: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, R2_BUCKET
 // (defaults to tomo-together-data).
 //
-// WHY THIS EXISTS: build-apk.yml and deploy-web.yml used to PUT into
-// /home/data over the Kudu VFS/zip API. There is no Kudu on Workers, so without
-// this the APK download and app.tomo-together.com would silently stop updating
-// at cutover.
-//
 // R2 is reached over its S3-compatible API, signed with the account API token
-// (access key = token id, secret = sha256(token)). The token therefore needs
-// "Workers R2 Storage: Edit" as well as "Workers Scripts: Edit"; a Workers-only
-// deploy token gets a 403 here.
+// (access key = token id, secret = sha256(token)). CI passes R2_PUBLISH_TOKEN,
+// a token scoped to object read/write on this one bucket.
 import { createHash, createHmac } from 'node:crypto';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, join, posix } from 'node:path';

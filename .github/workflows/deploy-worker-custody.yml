@@ -1,8 +1,7 @@
 name: Deploy custody Worker
 
-# Cloudflare Worker replacement for the `ht6-tomoyard-crypto` App Service.
-# This service holds treasury custody: the deploy is gated on a typecheck and
-# followed by a readiness probe, mirroring deploy-crypto.yml.
+# Crypto custody service. It holds treasury custody: the deploy is gated on a
+# typecheck and followed by a readiness probe.
 
 on:
   push:

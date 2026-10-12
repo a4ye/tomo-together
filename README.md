@@ -28,7 +28,7 @@ assets before commercial use.
 - **Acorns and wardrobe:** earn acorns through friendship levels and spend them on
   avatar items.
 - **Wallet and staking:** the separately gated crypto service uses Unifold
-  treasury custody for Base USDC and MongoDB Atlas for durable ledger,
+  treasury custody for Base USDC and Cloudflare D1 for durable ledger,
   withdrawal, event, and idempotency state. Hangout no-shows can forfeit a stake
   to attendees. This moves real value when enabled.
 - **Music:** `Tomo Yard.mp3` loops quietly while the app is active. The global
@@ -40,36 +40,26 @@ assets before commercial use.
 - Main API and marketing site: <https://tomo-together.com>
 - Expo web app: <https://app.tomo-together.com>
 - APK download: <https://tomo-together.com/apk>
-- Legacy hostnames `ht6.icinoxis.net` / `ht6-app.icinoxis.net` 301-redirect to
-  the domains above; API routes still answer on the old host for installed APKs.
-- Main Azure App Service: `ht6-tomoyard`
-- Crypto Azure App Service: `ht6-tomoyard-crypto`
-- Atlas databases on the dedicated `tomo-yard` cluster: `tomoyard` (main social
-  data) and `ht6_crypto` (crypto ledger), each with its own least-privilege user
+- Main API, marketing site and web app: Cloudflare Worker `tomo-together-api`
+  (`server/worker/`), D1 `tomo-together`, R2 `tomo-together-data` for uploads,
+  the APK and the web bundle
+- Crypto service: Cloudflare Worker `tomo-together-custody` (`custody/worker/`),
+  D1 `tomo-together-custody`, reached from the API through a service binding
 
-Terraform in `infra/` manages Azure and Cloudflare. External crypto credentials
-live in Azure Key Vault `ht6tomoyardkv4831`; no secret value belongs in Terraform,
-Git, an `EXPO_PUBLIC_*` variable, or chat. The crypto feature is enabled only when
-Terraform's `crypto_enabled` input adds `CRYPTO_API_URL` to the main service. Keep
-that input `false` until the crypto deployment passes `/ready` and the non-monetary
-acceptance checks.
-
-Read [the production runbook](docs/production-setup.md) before applying
-infrastructure, rotating credentials, or enabling crypto. It contains the Atlas
-inventory, Key Vault secret names, two-phase deployment, checks, rollback, and
-rotation procedures.
+Secrets are Worker secrets (`wrangler secret`), never in Git or an
+`EXPO_PUBLIC_*` variable.
 
 CI/CD on push to `main` uses:
 
-- `.github/workflows/deploy-server.yml` for the main API and marketing site;
-- `.github/workflows/deploy-web.yml` for the Expo web build;
-- `.github/workflows/build-apk.yml` for the signed Android APK; and
-- `.github/workflows/deploy-crypto.yml` for the separately tested crypto service.
+- `.github/workflows/deploy-worker-api.yml` for the main API Worker;
+- `.github/workflows/deploy-worker-custody.yml` for the custody Worker;
+- `.github/workflows/deploy-web.yml` for the Expo web build (published to R2); and
+- `.github/workflows/build-apk.yml` for the signed Android APK (published to R2).
 
-The crypto workflow needs `AZURE_CRYPTO_WEBAPP_PUBLISH_PROFILE`. APK signing needs
+The Worker workflows need `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; the
+R2 publishes need `R2_PUBLISH_TOKEN`. APK signing needs
 `ANDROID_KEYSTORE_BASE64` and `ANDROID_KEYSTORE_PASSWORD`; preserve the original
-keystore because APK updates must keep the same signature. No public auth-provider
-build variables are required — authentication is served by the app's own API.
+keystore because APK updates must keep the same signature.
 
 ## Run locally
 
@@ -96,7 +86,7 @@ npm start
 
 Start the main API with `CRYPTO_API_URL=http://localhost:8787` and the same
 32-or-more-character `CRYPTO_SERVICE_TOKEN` on both processes. Production refuses
-the JSON store and requires Atlas.
+the JSON store and requires MongoDB.
 
 The product cash-out minimum is 20 USDC (`20000000` base units). A withdrawal's
 `Idempotency-Key` and exact payload must be reused after an uncertain response;
